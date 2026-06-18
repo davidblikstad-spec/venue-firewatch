@@ -1,0 +1,41 @@
+# Copy to config.yaml and edit. Safe to commit (no secrets) — but your
+# recipients' phone numbers are personal data, so consider gitignoring it.
+
+# Who gets SMS alerts. msisdn = international format, digits only, no '+'.
+recipients:
+  - name: Duty manager
+    msisdn: "4799999999"
+  - name: Technical lead
+    msisdn: "4788888888"
+
+# Zones that EVENT (silent) mode silences. Detectors in any other zone keep
+# alerting even during an event.
+silent_zones_in_event:
+  - stage
+
+# Each detector must match a Zigbee2MQTT friendly_name exactly.
+# IMPORTANT: confirm `alarm_property` against the values your device actually
+# exposes in the Z2M frontend. For the frient HESZB-120 heat alarm it is
+# typically "heat"; a smoke alarm exposes "smoke". When unsure, watch the
+# device's JSON in Z2M and use the boolean field that flips on detection.
+detectors:
+  - friendly_name: heat_stage_left
+    label: Stage left
+    kind: heat
+    alarm_property: heat
+    zone: stage
+    offline_after_hours: 6
+
+  - friendly_name: smoke_lobby
+    label: Lobby
+    kind: smoke
+    alarm_property: smoke
+    zone: front_of_house
+    offline_after_hours: 6
+
+  - friendly_name: smoke_rack_room
+    label: Rack room
+    kind: smoke
+    alarm_property: smoke
+    zone: technical
+    offline_after_hours: 6

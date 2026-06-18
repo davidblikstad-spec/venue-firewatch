@@ -1,0 +1,20 @@
+[Unit]
+Description=Venue FireWatch (secondary smoke/heat monitor)
+# Start after the broker so subscriptions connect cleanly. Z2M and Mosquitto
+# run as their own services; this app only depends on the broker being up.
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=firewatch
+WorkingDirectory=/opt/venue-firewatch
+EnvironmentFile=/opt/venue-firewatch/.env
+ExecStart=/opt/venue-firewatch/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=3
+# If this app dies, Z2M keeps the Zigbee mesh alive; systemd restarts us and
+# we reconnect to the broker and resume the persisted mode.
+
+[Install]
+WantedBy=multi-user.target

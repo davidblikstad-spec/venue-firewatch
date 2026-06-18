@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="normal">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Venue FireWatch</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">FireWatch</span>
+      <span class="brand-sub">secondary monitor</span>
+    </div>
+    <div class="conn" id="conn" data-state="down">link</div>
+  </header>
+
+  <!-- Signature element: the mode banner dominates and recolors the panel. -->
+  <section class="banner" id="banner">
+    <div class="banner-mode" id="bannerMode">NORMAL</div>
+    <div class="banner-line" id="bannerLine">Detection live — alerts will be sent</div>
+    <div class="banner-countdown" id="countdown" hidden></div>
+  </section>
+
+  <main class="grid">
+    <section class="card" id="detectorsCard">
+      <h2 class="card-title">Detectors</h2>
+      <ul class="detectors" id="detectors">
+        <li class="empty">Waiting for data…</li>
+      </ul>
+    </section>
+
+    <section class="card" id="upsCard">
+      <h2 class="card-title">Power / UPS</h2>
+      <div class="ups" id="ups"><span class="empty">No UPS configured</span></div>
+    </section>
+
+    <section class="card controls" id="controlsCard">
+      <h2 class="card-title">Event mode</h2>
+      <p class="hint">Silences alerts for haze zones while the fire watch is active. Always auto-reverts.</p>
+      <div class="row">
+        <label for="until">Revert at</label>
+        <input type="datetime-local" id="until" />
+      </div>
+      <div class="quick">
+        <button data-hours="2" class="ghost">+2h</button>
+        <button data-hours="4" class="ghost">+4h</button>
+        <button data-hours="6" class="ghost">+6h</button>
+      </div>
+      <button id="armBtn" class="primary">Arm event mode</button>
+      <button id="endBtn" class="danger" hidden>End event mode now</button>
+
+      <h2 class="card-title spaced">SMS routing</h2>
+      <div class="seg" id="policy" role="group" aria-label="SMS routing">
+        <button data-policy="failover" class="seg-btn">GatewayAPI → modem</button>
+        <button data-policy="both" class="seg-btn">Both at once</button>
+      </div>
+      <p class="hint" id="policyHint"></p>
+    </section>
+
+    <section class="card log" id="logCard">
+      <h2 class="card-title">Recent events</h2>
+      <ul class="audit" id="audit"><li class="empty">—</li></ul>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
