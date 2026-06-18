@@ -46,9 +46,20 @@ Zigbee mesh.
 - **SMS routing, operator-selectable:** *GatewayAPI → modem* failover (default),
   or *both at once*. GatewayAPI is primary; the TRM240 sends native cellular SMS
   as the fallback that works even with no internet.
+- **Delivery receipts (DLR):** GatewayAPI delivery reports are captured via a
+  webhook (`/api/sms/dlr`) and logged in the audit trail.
+- **Balance monitoring:** periodic GatewayAPI credit check with a configurable
+  low-credit warning (`FW_BALANCE_WARN_THRESHOLD`), shown on the dashboard.
+- **Per-recipient escalation:** recipients have a `priority` field. The first
+  tier is alerted immediately; if no acknowledgment arrives within
+  `FW_ESCALATION_TIMEOUT_MINUTES`, the next tier is alerted. Acknowledgment
+  via `POST /api/sms/ack` stops escalation.
+- **Dashboard authentication:** optional password protection
+  (`FW_AUTH_PASSWORD`). When set, all dashboard and API access requires a
+  session token obtained via the login page.
 - **Supervision:** flags detectors that miss check-ins or report low battery.
-- **Audit trail:** every alarm, mode change and SMS attempt in SQLite — your
-  incident-review record.
+- **Audit trail:** every alarm, mode change, SMS attempt, DLR, and escalation
+  in SQLite — your incident-review record.
 
 ## Setup
 
@@ -79,9 +90,8 @@ For production, copy `systemd/venue-firewatch.service`, adjust paths, and
 
 ## Status
 
-Scaffold / v0.1 — working skeleton meant to be built on. Known next steps:
-GatewayAPI delivery-receipt (DLR) webhook handling, GatewayAPI balance check,
-per-recipient escalation, and auth on the dashboard before exposing it.
+v0.2 — all planned features implemented: DLR webhooks, balance monitoring,
+per-recipient escalation, and dashboard auth.
 
 ## License
 

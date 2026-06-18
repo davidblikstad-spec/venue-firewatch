@@ -9,9 +9,10 @@ from app.models import SmsPolicy
 from app.notify import Notifier, SendResult
 
 
-def _patch(notifier, primary_ok, secondary_ok):
+def _patch(notifier, primary_ok, secondary_ok, msg_id="test-123"):
     async def p(msisdn, text):
-        return SendResult("gatewayapi", primary_ok, "ok" if primary_ok else "fail")
+        return SendResult("gatewayapi", primary_ok, "ok" if primary_ok else "fail",
+                          message_id=msg_id if primary_ok else None)
 
     async def s(msisdn, text):
         return SendResult("trm240", secondary_ok, "ok" if secondary_ok else "fail")
@@ -21,7 +22,6 @@ def _patch(notifier, primary_ok, secondary_ok):
 
 
 def _notifier():
-    # Settings not used by the patched transports, so pass a minimal stand-in.
     class _S:
         gatewayapi_token = "x"; gatewayapi_base_url = "http://x"
         gatewayapi_sender = "T"; gatewayapi_timeout_s = 1
@@ -48,3 +48,16 @@ def test_both_always_sends_twice():
     n = _notifier(); _patch(n, primary_ok=True, secondary_ok=True)
     res = asyncio.run(n.send_one("4799999999", "hi", SmsPolicy.BOTH))
     assert {r.transport for r in res} == {"gatewayapi", "trm240"}
+
+
+def test_send_result_includes_message_id():
+    n = _notifier(); _patch(n, primary_ok=True, secondary_ok=True, msg_id="abc-456")
+    res = asyncio.run(n.send_one("4799999999", "hi", SmsPolicy.FAILOVER))
+    assert res[0].message_id == "abc-456"
+
+
+def test_broadcast_returns_per_recipient():
+    n = _notifier(); _patch(n, primary_ok=True, secondary_ok=True)
+    res = asyncio.run(n.broadcast(["111", "222"], "alert", SmsPolicy.FAILOVER))
+    assert "111" in res and "222" in res
+    assert all(r[0].ok for r in res.values())

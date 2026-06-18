@@ -57,10 +57,23 @@ class Settings(BaseSettings):
     # the end time chosen by the operator. A safety backstop against "left on".
     event_max_hours: int = 8
 
+    # --- Dashboard auth ---
+    # Set a password to protect the dashboard and API. Leave empty to disable.
+    auth_password: str | None = None
+    auth_token_ttl_hours: int = 24
+
+    # --- Balance check ---
+    balance_check_interval_minutes: int = 60
+    balance_warn_threshold: float = 10.0  # warn when credit below this
+
+    # --- Escalation ---
+    escalation_timeout_minutes: int = 5  # re-alert after this many minutes with no ack
+
 
 class Recipient(BaseModel):
     name: str
     msisdn: str  # international format, e.g. 4799999999 (no +)
+    priority: int = 0  # lower = alerted first; same priority = alerted together
 
 
 class Detector(BaseModel):

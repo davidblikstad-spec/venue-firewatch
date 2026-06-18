@@ -49,6 +49,12 @@ class UpsState(BaseModel):
     last_seen: datetime | None = None
 
 
+class BalanceState(BaseModel):
+    credit: float | None = None
+    low: bool = False
+    last_checked: datetime | None = None
+
+
 class SystemSnapshot(BaseModel):
     """Everything the dashboard needs in one push."""
 
@@ -57,4 +63,5 @@ class SystemSnapshot(BaseModel):
     event_until: datetime | None = None
     detectors: list[DetectorState] = Field(default_factory=list)
     ups: UpsState | None = None
+    balance: BalanceState | None = None
     updated_at: datetime = Field(default_factory=now)

@@ -25,12 +25,28 @@ CREATE TABLE IF NOT EXISTS kv (
 CREATE TABLE IF NOT EXISTS audit (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     ts        TEXT NOT NULL,
-    kind      TEXT NOT NULL,   -- alarm | mode_change | sms | fault | system
+    kind      TEXT NOT NULL,   -- alarm | mode_change | sms | fault | system | dlr | escalation
     severity  TEXT,
     actor     TEXT,            -- who/what caused it
     detail    TEXT             -- JSON blob
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit (ts);
+CREATE TABLE IF NOT EXISTS sms_tracker (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id  TEXT,
+    msisdn      TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    transport   TEXT NOT NULL,
+    sent_at     TEXT NOT NULL,
+    delivered   INTEGER DEFAULT 0,
+    dlr_status  TEXT,
+    dlr_at      TEXT,
+    ack         INTEGER DEFAULT 0,
+    ack_at      TEXT,
+    alert_key   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sms_tracker_msgid ON sms_tracker (message_id);
+CREATE INDEX IF NOT EXISTS idx_sms_tracker_alert ON sms_tracker (alert_key, msisdn);
 """
 
 
@@ -96,3 +112,51 @@ class Database:
                     }
                 )
             return out
+
+    async def track_sms(
+        self,
+        message_id: str | None,
+        msisdn: str,
+        text: str,
+        transport: str,
+        alert_key: str | None = None,
+    ) -> int:
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute(
+                "INSERT INTO sms_tracker (message_id, msisdn, text, transport, sent_at, alert_key) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (message_id, msisdn, text, transport, now().isoformat(), alert_key),
+            )
+            await db.commit()
+            return cur.lastrowid  # type: ignore[return-value]
+
+    async def update_dlr(self, message_id: str, status: str) -> bool:
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute(
+                "UPDATE sms_tracker SET delivered = ?, dlr_status = ?, dlr_at = ? "
+                "WHERE message_id = ?",
+                (1 if status in ("DELIVRD", "delivered") else 0, status, now().isoformat(), message_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def record_ack(self, msisdn: str, alert_key: str) -> bool:
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute(
+                "UPDATE sms_tracker SET ack = 1, ack_at = ? "
+                "WHERE msisdn = ? AND alert_key = ? AND ack = 0",
+                (now().isoformat(), msisdn, alert_key),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def unacked_alerts(self, alert_key: str) -> list[dict]:
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT msisdn, sent_at, delivered, dlr_status FROM sms_tracker "
+                "WHERE alert_key = ? AND ack = 0 ORDER BY sent_at",
+                (alert_key,),
+            )
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]

@@ -15,6 +15,7 @@ from typing import Awaitable, Callable
 from .config import Settings, YamlConfig
 from .db import Database
 from .models import (
+    BalanceState,
     DetectorState,
     Mode,
     Severity,
@@ -48,6 +49,9 @@ class StateMachine:
         self.sms_policy: SmsPolicy = SmsPolicy.FAILOVER
         self.event_until: datetime | None = None
         self.ups = UpsState()
+        self.balance = BalanceState()
+        self._alert_counter = 0
+        self._active_alerts: dict[str, dict] = {}
 
         self._detectors: dict[str, DetectorState] = {
             d.friendly_name: DetectorState(
@@ -76,6 +80,10 @@ class StateMachine:
             await self.set_mode(Mode.NORMAL, actor="restore (expired)")
         log.info("restored mode=%s policy=%s until=%s", self.mode, self.sms_policy, self.event_until)
 
+    def _next_alert_key(self) -> str:
+        self._alert_counter += 1
+        return f"alert-{self._alert_counter}-{int(now().timestamp())}"
+
     def snapshot(self) -> SystemSnapshot:
         return SystemSnapshot(
             mode=self.mode,
@@ -83,6 +91,7 @@ class StateMachine:
             event_until=self.event_until,
             detectors=list(self._detectors.values()),
             ups=self.ups,
+            balance=self.balance,
         )
 
     async def _publish(self) -> None:
@@ -214,23 +223,106 @@ class StateMachine:
     # ---- alerting -----------------------------------------------------
 
     async def _raise(self, severity: Severity, text: str, actor: str) -> None:
-        recipients = [r.msisdn for r in self._cfg.recipients]
-        if not recipients:
+        alert_key = self._next_alert_key()
+        sorted_recips = sorted(self._cfg.recipients, key=lambda r: r.priority)
+        if not sorted_recips:
             log.error("alert with no recipients configured: %s", text)
             return
-        # The operator-selected policy governs all alerts. FAILOVER adds at most
-        # the GatewayAPI timeout before the modem takes over — acceptable for a
-        # secondary system. Switch to BOTH from the dashboard when redundancy
-        # matters more than the odd duplicate text.
+
+        first_priority = sorted_recips[0].priority
+        initial_recips = [r for r in sorted_recips if r.priority == first_priority]
+        msisdns = [r.msisdn for r in initial_recips]
+
         policy = self.sms_policy
-        results = await self._notifier.broadcast(recipients, text, policy)
+        results = await self._notifier.broadcast(msisdns, text, policy)
+
+        for msisdn, send_results in results.items():
+            for sr in send_results:
+                if sr.ok:
+                    await self._db.track_sms(sr.message_id, msisdn, text, sr.transport, alert_key)
+
         await self._db.audit(
             "sms",
             {
                 "text": text,
                 "policy": policy.value,
+                "alert_key": alert_key,
                 "results": {m: [r.__dict__ for r in rs] for m, rs in results.items()},
             },
             severity=severity.value,
             actor=actor,
         )
+
+        if severity is Severity.CRITICAL and len(sorted_recips) > len(initial_recips):
+            remaining = [r for r in sorted_recips if r.priority > first_priority]
+            self._active_alerts[alert_key] = {
+                "text": text,
+                "severity": severity,
+                "actor": actor,
+                "remaining_recipients": remaining,
+                "sent_at": now(),
+                "escalation_round": 0,
+            }
+
+    async def check_escalations(self) -> None:
+        """Escalate unacknowledged alerts to the next priority tier."""
+        timeout = timedelta(minutes=self._s.escalation_timeout_minutes)
+        expired_keys = []
+        for alert_key, info in list(self._active_alerts.items()):
+            if now() - info["sent_at"] < timeout:
+                continue
+            unacked = await self._db.unacked_alerts(alert_key)
+            if not unacked:
+                expired_keys.append(alert_key)
+                continue
+
+            remaining = info["remaining_recipients"]
+            if not remaining:
+                expired_keys.append(alert_key)
+                continue
+
+            next_priority = remaining[0].priority
+            next_batch = [r for r in remaining if r.priority == next_priority]
+            after = [r for r in remaining if r.priority > next_priority]
+
+            msisdns = [r.msisdn for r in next_batch]
+            text = f"[ESCALATION] {info['text']}"
+            results = await self._notifier.broadcast(msisdns, text, self.sms_policy)
+
+            for msisdn, send_results in results.items():
+                for sr in send_results:
+                    if sr.ok:
+                        await self._db.track_sms(sr.message_id, msisdn, text, sr.transport, alert_key)
+
+            await self._db.audit(
+                "escalation",
+                {
+                    "alert_key": alert_key,
+                    "round": info["escalation_round"] + 1,
+                    "recipients": msisdns,
+                    "results": {m: [r.__dict__ for r in rs] for m, rs in results.items()},
+                },
+                severity=info["severity"].value,
+                actor="escalation",
+            )
+            log.warning("escalated alert %s to %s", alert_key, msisdns)
+
+            if after:
+                info["remaining_recipients"] = after
+                info["sent_at"] = now()
+                info["escalation_round"] += 1
+            else:
+                expired_keys.append(alert_key)
+
+        for k in expired_keys:
+            self._active_alerts.pop(k, None)
+
+    async def ack_alert(self, msisdn: str, alert_key: str) -> bool:
+        """Acknowledge an alert — stops escalation for this recipient."""
+        found = await self._db.record_ack(msisdn, alert_key)
+        if found:
+            await self._db.audit("system", {"action": "ack", "alert_key": alert_key, "msisdn": msisdn}, actor="recipient")
+            unacked = await self._db.unacked_alerts(alert_key)
+            if not unacked:
+                self._active_alerts.pop(alert_key, None)
+        return found

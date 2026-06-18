@@ -5,4 +5,4 @@ system and must never be relied on as the venue's life-safety detection. See
 README.md for scope.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

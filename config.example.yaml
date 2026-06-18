@@ -2,11 +2,19 @@
 # recipients' phone numbers are personal data, so consider gitignoring it.
 
 # Who gets SMS alerts. msisdn = international format, digits only, no '+'.
+# priority: lower = alerted first. Same priority = alerted together.
+# When an alert goes unacknowledged for FW_ESCALATION_TIMEOUT_MINUTES,
+# it escalates to the next priority tier.
 recipients:
   - name: Duty manager
     msisdn: "4799999999"
+    priority: 0
   - name: Technical lead
     msisdn: "4788888888"
+    priority: 0
+  - name: Venue owner
+    msisdn: "4777777777"
+    priority: 1
 
 # Zones that EVENT (silent) mode silences. Detectors in any other zone keep
 # alerting even during an event.

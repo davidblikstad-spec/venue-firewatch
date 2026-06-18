@@ -12,7 +12,11 @@ function connect() {
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
 
   ws.onopen = () => setConn("up");
-  ws.onclose = () => { setConn("down"); setTimeout(connect, 3000); };
+  ws.onclose = (ev) => {
+    setConn("down");
+    if (ev.code === 4001) { location.href = "/login"; return; }
+    setTimeout(connect, 3000);
+  };
   ws.onerror = () => ws.close();
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
@@ -56,6 +60,9 @@ function render() {
   // UPS
   renderUps();
 
+  // Balance
+  renderBalance();
+
   // Controls
   $("armBtn").hidden = state.mode === "event";
   $("endBtn").hidden = state.mode !== "event";
@@ -97,6 +104,20 @@ function renderUps() {
     ${u.low_battery ? '<div class="ups-bad">LOW BATTERY</div>' : ""}`;
 }
 
+function renderBalance() {
+  const el = $("balance");
+  const b = state.balance;
+  if (!b || b.credit == null) {
+    el.innerHTML = '<span class="empty">Not checked</span>';
+    return;
+  }
+  const cls = b.low ? "ups-bad" : "";
+  el.innerHTML = `
+    <div><span class="k">credit </span><span class="${cls}">${b.credit.toFixed(2)}</span></div>
+    ${b.low ? '<div class="ups-bad">LOW — top up SMS credits</div>' : ""}
+    ${b.last_checked ? `<div><span class="k">checked </span>${new Date(b.last_checked).toLocaleTimeString()}</div>` : ""}`;
+}
+
 function renderCountdown() {
   const el = $("countdown");
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
@@ -115,7 +136,9 @@ function renderCountdown() {
 // ---- Audit ----
 async function loadAudit() {
   try {
-    const rows = await (await fetch("/api/audit?limit=40")).json();
+    const resp = await fetch("/api/audit?limit=40");
+    if (resp.status === 401) { location.href = "/login"; return; }
+    const rows = await resp.json();
     const el = $("audit");
     el.innerHTML = rows.length
       ? rows.map(auditRow).join("")
@@ -136,6 +159,8 @@ function summarize(r) {
     case "alarm": return `ALARM ${d.detector}${d.silenced ? " (silenced)" : ""}`;
     case "mode_change": return `mode ${d.from} → ${d.to}`;
     case "sms": return `SMS ${d.policy}: ${trunc(d.text)}`;
+    case "dlr": return `DLR ${d.message_id}: ${d.status}`;
+    case "escalation": return `ESCALATED to ${(d.recipients || []).join(", ")}`;
     case "fault": return `fault: ${trunc(JSON.stringify(d))}`;
     default: return `${r.kind}: ${trunc(JSON.stringify(d))}`;
   }
