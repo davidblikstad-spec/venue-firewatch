@@ -782,5 +782,20 @@ async def ws(socket: WebSocket, token: str | None = Query(default=None)) -> None
 
 
 # ---- static frontend (mounted last so /api and /ws take precedence) ------
+
+class _NoCacheStatic(StaticFiles):
+    """Serve dashboard assets with revalidation.
+
+    This is a control surface: a stale cached app.js/index.html must never
+    keep rendering old behaviour. `no-cache` forces the browser to revalidate
+    on every load — still cheap, since an unchanged file returns 304 via ETag.
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 _web_dir = Path(__file__).parent / "web"
-app.mount("/", StaticFiles(directory=str(_web_dir), html=True), name="web")
+app.mount("/", _NoCacheStatic(directory=str(_web_dir), html=True), name="web")
