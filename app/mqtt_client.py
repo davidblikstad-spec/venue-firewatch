@@ -139,16 +139,18 @@ class MqttBridge:
                     username=self._s.mqtt_username,
                     password=self._s.mqtt_password,
                 ) as client:
-                    # Device inventory (for discovery) + every device's state.
-                    # Wildcard so detectors added from the dashboard are picked
-                    # up without reconnecting.
-                    await client.subscribe(f"{base}/bridge/devices")
+                    # bridge/# for Z2M state + device inventory; +/ for every
+                    # device's state. Wildcard so detectors added from the
+                    # dashboard are picked up without reconnecting.
+                    await client.subscribe(f"{base}/bridge/#")
                     await client.subscribe(f"{base}/+")
-                    log.info("subscribed to %s/+ and bridge/devices", base)
+                    log.info("subscribed to %s/+ and bridge/#", base)
+                    await self._machine.set_mqtt_connected(True)
                     async for message in client.messages:
                         await self._handle(str(message.topic), message.payload)
             except aiomqtt.MqttError as exc:
                 log.warning("MQTT connection lost (%s); retrying in 5s", exc)
+                await self._machine.set_mqtt_connected(False)
                 await asyncio.sleep(5)
 
     async def _handle(self, topic: str, raw: bytes) -> None:
@@ -158,8 +160,18 @@ class MqttBridge:
         if sub == "bridge/devices":
             self._registry.update(raw)
             return
+        if sub == "bridge/state":
+            # Z2M publishes either a bare "online"/"offline" or {"state": ...}.
+            text = raw.decode(errors="ignore").strip()
+            try:
+                parsed = json.loads(text)
+                state = parsed.get("state") if isinstance(parsed, dict) else parsed
+            except (ValueError, TypeError):
+                state = text.strip('"')
+            await self._machine.set_zigbee_online(state == "online")
+            return
         if sub.startswith("bridge/"):
-            return  # bridge state/info/logging — not a detector
+            return  # other bridge info/logging — not a detector
 
         # Only forward updates for currently-configured detectors. Look the
         # alarm property up live so dashboard edits take effect immediately.

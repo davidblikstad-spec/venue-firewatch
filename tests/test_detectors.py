@@ -69,6 +69,37 @@ def _machine(tmp_path):
     return StateMachine(settings, cfg, db, Notifier(settings)), cfg
 
 
+def test_bridge_state_updates_link(tmp_path):
+    machine, _ = _machine(tmp_path)
+    from app.mqtt_client import MqttBridge
+    bridge = MqttBridge(machine._s, machine._cfg, machine)
+
+    async def go():
+        # Z2M may send bare "online", a quoted string, or {"state": ...}.
+        for payload, expect in [
+            (b'{"state":"online"}', True), (b'{"state":"offline"}', False),
+            (b"online", True), (b'"offline"', False),
+        ]:
+            await bridge._handle("zigbee2mqtt/bridge/state", payload)
+            assert machine.link.zigbee_online is expect, payload
+
+    asyncio.run(go())
+
+
+def test_broker_drop_clears_zigbee_online(tmp_path):
+    machine, _ = _machine(tmp_path)
+
+    async def go():
+        await machine.set_mqtt_connected(True)
+        await machine.set_zigbee_online(True)
+        assert machine.link.mqtt_connected and machine.link.zigbee_online
+        # Losing the broker means we can no longer vouch for Z2M either.
+        await machine.set_mqtt_connected(False)
+        assert not machine.link.mqtt_connected and not machine.link.zigbee_online
+
+    asyncio.run(go())
+
+
 def test_set_detectors_preserves_live_state(tmp_path):
     machine, cfg = _machine(tmp_path)
 

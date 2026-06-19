@@ -59,6 +59,17 @@ class BalanceState(BaseModel):
     last_checked: datetime | None = None
 
 
+class LinkState(BaseModel):
+    """Health of the Zigbee pipeline upstream of this app (broker + Z2M).
+
+    Distinct from the dashboard's own WebSocket: this is whether FireWatch can
+    actually receive detector data, which is what the operator cares about.
+    """
+    mqtt_connected: bool = False   # connected to the MQTT broker
+    zigbee_online: bool = False    # Z2M reports bridge state "online"
+    last_message: datetime | None = None
+
+
 class SystemSnapshot(BaseModel):
     """Everything the dashboard needs in one push."""
 
@@ -68,4 +79,5 @@ class SystemSnapshot(BaseModel):
     detectors: list[DetectorState] = Field(default_factory=list)
     ups: UpsState | None = None
     balance: BalanceState | None = None
+    link: LinkState = Field(default_factory=LinkState)
     updated_at: datetime = Field(default_factory=now)

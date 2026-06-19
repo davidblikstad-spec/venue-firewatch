@@ -14,12 +14,20 @@
       <span class="brand-sub">secondary monitor</span>
     </div>
     <div class="topbar-right">
-      <a class="settings-link" id="z2mLink" href="#" target="_blank" rel="noopener" title="Zigbee2MQTT frontend" aria-label="Zigbee2MQTT">🐝</a>
+      <a class="settings-link" id="z2mLink" href="#" target="_blank" rel="noopener" title="Open the Zigbee2MQTT frontend" aria-label="Zigbee2MQTT">🐝</a>
       <a class="settings-link" href="/detectors" title="Detectors" aria-label="Detectors">🔥</a>
       <a class="settings-link" href="/settings" title="Settings" aria-label="Settings">⚙</a>
-      <div class="conn" id="conn" data-state="down">link</div>
+      <div class="conn" id="zlink" data-state="down" title="Zigbee pipeline: MQTT broker + Zigbee2MQTT">zigbee</div>
+      <div class="conn" id="conn" data-state="down" title="Dashboard connection to the FireWatch server">server</div>
     </div>
   </header>
+  <script>
+    // Resolve the Zigbee2MQTT link inline (same host, port 8081) so it works
+    // even if a cached app.js is served. Override Z2M_PORT before this loads
+    // if you reverse-proxy it elsewhere.
+    document.getElementById("z2mLink").href =
+      location.protocol + "//" + location.hostname + ":" + (window.Z2M_PORT || 8081);
+  </script>
 
   <!-- Signature element: the mode banner dominates and recolors the panel. -->
   <section class="banner" id="banner">

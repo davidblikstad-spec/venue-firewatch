@@ -25,9 +25,24 @@ function connect() {
 }
 
 function setConn(s) {
-  const el = $("conn");
-  el.dataset.state = s;
-  el.textContent = s === "up" ? "linked" : "no link";
+  // Browser <-> FireWatch server WebSocket. Label stays "server"; colour says state.
+  $("conn").dataset.state = s;
+}
+
+function renderLink() {
+  // Zigbee pipeline health, independent of the dashboard's own connection.
+  const el = $("zlink");
+  const l = (state && state.link) || {};
+  if (l.mqtt_connected && l.zigbee_online) {
+    el.dataset.state = "up"; el.textContent = "zigbee";
+    el.title = "Zigbee2MQTT online — receiving detector data";
+  } else if (l.mqtt_connected) {
+    el.dataset.state = "warn"; el.textContent = "mqtt only";
+    el.title = "Connected to the MQTT broker, but Zigbee2MQTT reports offline";
+  } else {
+    el.dataset.state = "down"; el.textContent = "no mqtt";
+    el.title = "Not connected to the MQTT broker — no detector data";
+  }
 }
 
 // ---- Render ----
@@ -56,6 +71,9 @@ function render() {
   } else {
     list.innerHTML = state.detectors.map(detRow).join("");
   }
+
+  // Zigbee/MQTT pipeline health
+  renderLink();
 
   // UPS
   renderUps();
@@ -203,9 +221,8 @@ document.querySelectorAll(".seg-btn").forEach((b) =>
   })
 );
 
-// Zigbee2MQTT frontend lives on the same host, separate port.
-const Z2M_PORT = 8081;
-$("z2mLink").href = `${location.protocol}//${location.hostname}:${Z2M_PORT}`;
+// (The 🐝 Zigbee2MQTT link href is set inline in index.html so it survives a
+// cached app.js.)
 
 // ---- utils ----
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }

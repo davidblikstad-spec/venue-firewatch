@@ -64,6 +64,7 @@ body {
   border: 1px solid var(--hairline); color: var(--muted);
 }
 .conn[data-state="up"] { color: var(--live); border-color: color-mix(in srgb, var(--live) 50%, transparent); }
+.conn[data-state="warn"] { color: var(--silenced); border-color: color-mix(in srgb, var(--silenced) 50%, transparent); }
 .conn[data-state="down"] { color: var(--alarm); border-color: color-mix(in srgb, var(--alarm) 50%, transparent); }
 
 /* --- Signature banner --- */

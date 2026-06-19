@@ -17,6 +17,7 @@ from .db import Database
 from .models import (
     BalanceState,
     DetectorState,
+    LinkState,
     Mode,
     Severity,
     SmsPolicy,
@@ -50,6 +51,7 @@ class StateMachine:
         self.event_until: datetime | None = None
         self.ups = UpsState()
         self.balance = BalanceState()
+        self.link = LinkState()
         self._alert_counter = 0
         self._active_alerts: dict[str, dict] = {}
 
@@ -119,6 +121,7 @@ class StateMachine:
             detectors=list(self._detectors.values()),
             ups=self.ups,
             balance=self.balance,
+            link=self.link,
         )
 
     async def _publish(self) -> None:
@@ -198,6 +201,7 @@ class StateMachine:
 
         det.last_seen = now()
         det.online = True
+        self.link.last_message = det.last_seen
         if "temperature" in payload:
             det.temperature = payload["temperature"]
         if "battery" in payload:
@@ -235,6 +239,25 @@ class StateMachine:
         )
 
     # ---- UPS ----------------------------------------------------------
+
+    # ---- MQTT / Zigbee pipeline health -------------------------------
+
+    async def set_mqtt_connected(self, connected: bool) -> None:
+        if self.link.mqtt_connected == connected:
+            return
+        self.link.mqtt_connected = connected
+        if not connected:
+            self.link.zigbee_online = False  # can't know Z2M state without the broker
+        log.info("MQTT broker %s", "connected" if connected else "disconnected")
+        await self._publish()
+
+    async def set_zigbee_online(self, online: bool) -> None:
+        if self.link.zigbee_online == online:
+            return
+        self.link.zigbee_online = online
+        self.link.last_message = now()
+        log.info("Zigbee2MQTT bridge %s", "online" if online else "offline")
+        await self._publish()
 
     async def clear_ups(self) -> None:
         """Drop UPS state back to 'not monitored' when polling is disabled."""
