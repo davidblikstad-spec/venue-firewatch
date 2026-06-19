@@ -12,9 +12,16 @@ function connect() {
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
 
   ws.onopen = () => setConn("up");
-  ws.onclose = (ev) => {
+  ws.onclose = async (ev) => {
     setConn("down");
     if (ev.code === 4001) { location.href = "/login"; return; }
+    // A 403 handshake rejection (e.g. session cleared by a server restart)
+    // surfaces as a generic 1006 close, not 4001 — so check auth explicitly
+    // instead of retrying /ws forever.
+    try {
+      const r = await fetch("/api/state", { cache: "no-store" });
+      if (r.status === 401) { location.href = "/login"; return; }
+    } catch { /* server unreachable — fall through and retry */ }
     setTimeout(connect, 3000);
   };
   ws.onerror = () => ws.close();
