@@ -35,7 +35,9 @@ class Settings(BaseSettings):
     mqtt_base_topic: str = "zigbee2mqtt"
 
     # --- GatewayAPI (primary SMS) ---
-    # Pull the exact endpoint + token from your GatewayAPI dashboard.
+    # Pull the exact endpoint from your GatewayAPI dashboard. The token is
+    # normally set from the dashboard Settings page (stored in the db) — a value
+    # saved there overrides this env var. Leave unset to manage it via the UI.
     gatewayapi_base_url: str = "https://gatewayapi.com"
     gatewayapi_token: str | None = None
     gatewayapi_sender: str = "FireWatch"  # max 11 chars alphanumeric
@@ -58,7 +60,10 @@ class Settings(BaseSettings):
     event_max_hours: int = 8
 
     # --- Dashboard auth ---
-    # Set a password to protect the dashboard and API. Leave empty to disable.
+    # The password is normally chosen on first run via the dashboard and stored
+    # as a salted hash in the db. This env var is a legacy/bootstrap option: if
+    # set, it is migrated into the store on first startup. Leave empty to use the
+    # first-run setup flow instead.
     auth_password: str | None = None
     auth_token_ttl_hours: int = 24
 

@@ -52,6 +52,12 @@ body {
   font-family: var(--mono); font-size: .72rem; color: var(--muted);
   text-transform: uppercase; letter-spacing: .12em;
 }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.settings-link {
+  color: var(--muted); text-decoration: none; font-size: 1.05rem; line-height: 1;
+  opacity: .8; transition: opacity .2s, color .2s;
+}
+.settings-link:hover { opacity: 1; color: var(--text); }
 .conn {
   font-family: var(--mono); font-size: .72rem; text-transform: uppercase;
   letter-spacing: .12em; padding: 4px 10px; border-radius: 999px;

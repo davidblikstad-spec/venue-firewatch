@@ -93,6 +93,20 @@ For production, copy `systemd/venue-firewatch.service`, adjust paths, and
 v0.2 — all planned features implemented: DLR webhooks, balance monitoring,
 per-recipient escalation, and dashboard auth.
 
+### Configuration via the dashboard
+
+The dashboard password and the GatewayAPI token are managed from the UI and
+persisted in the database (the password is stored as a salted PBKDF2 hash, never
+in plaintext) — you do not need to set them in `.env`:
+
+- **First run:** the dashboard prompts you to choose a password (min 8 chars).
+  Until one is set, every page redirects to that setup screen.
+- **Later:** open **⚙ Settings** (top-right) to change the password or to set /
+  clear the GatewayAPI token. A new token takes effect immediately — no restart.
+- **Legacy `FW_AUTH_PASSWORD`:** if present in `.env`, it is migrated into the
+  store on first startup, so existing deployments keep working. A token saved in
+  the UI overrides `FW_GATEWAYAPI_TOKEN`.
+
 ## License
 
 MIT — see LICENSE.
