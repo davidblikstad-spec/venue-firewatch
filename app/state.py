@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable
 
-from .config import Settings, YamlConfig
+from .config import Detector, Settings, YamlConfig
 from .db import Database
 from .models import (
     BalanceState,
@@ -68,6 +68,33 @@ class StateMachine:
 
     def add_listener(self, fn: Listener) -> None:
         self._listeners.append(fn)
+
+    async def set_detectors(self, detectors: list[Detector]) -> None:
+        """Replace the monitored-detector set at runtime (dashboard-driven).
+
+        Live state (last_seen, alarm, battery…) is preserved for detectors that
+        stay; new ones start fresh; removed ones are dropped. The MQTT bridge
+        shares this `cfg` object and reads alarm properties live, so a new
+        detector is monitored on the next message with no reconnect.
+        """
+        self._cfg.detectors = detectors
+        rebuilt: dict[str, DetectorState] = {}
+        for d in detectors:
+            existing = self._detectors.get(d.friendly_name)
+            if existing is not None:
+                existing.label = d.label
+                existing.zone = d.zone
+                existing.kind = d.kind
+                rebuilt[d.friendly_name] = existing
+            else:
+                rebuilt[d.friendly_name] = DetectorState(
+                    friendly_name=d.friendly_name,
+                    label=d.label,
+                    zone=d.zone,
+                    kind=d.kind,
+                )
+        self._detectors = rebuilt
+        await self._publish()
 
     async def restore(self) -> None:
         """Resume mode/policy from the DB after a restart."""

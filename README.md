@@ -107,6 +107,24 @@ in plaintext) — you do not need to set them in `.env`:
   store on first startup, so existing deployments keep working. A token saved in
   the UI overrides `FW_GATEWAYAPI_TOKEN`.
 
+### Managing detectors from the dashboard
+
+The set of monitored smoke/heat alarms is edited from **🔥 Detectors** (top-right)
+and stored in the database — you no longer have to hand-edit `config.yaml`:
+
+- **Discovery:** the MQTT bridge subscribes to Z2M's retained
+  `zigbee2mqtt/bridge/devices` topic, so the page lists the devices actually
+  paired to the coordinator. Alarm-capable ones (those exposing `smoke`, `heat`,
+  `gas`, …) are listed first, and **Add** pre-fills a row with the right
+  `friendly_name`, `alarm_property`, and `kind`.
+- **Live updates:** the bridge subscribes with a wildcard and reads each
+  detector's `alarm_property` off the live config, so adding or editing a
+  detector takes effect on the next MQTT message — **no restart**.
+- **Migration:** on first boot the detectors in `config.yaml` are seeded into the
+  store; from then on the dashboard is authoritative.
+
+(`config.yaml` still holds SMS recipients and `silent_zones_in_event`.)
+
 ## License
 
 MIT — see LICENSE.

@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import hashlib
 import hmac
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -20,12 +21,12 @@ from pathlib import Path
 from fastapi import Cookie, Depends, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from .config import get_settings, load_yaml_config
+from .config import Detector, get_settings, load_yaml_config
 from .db import Database
 from .models import BalanceState, Mode, SmsPolicy, SystemSnapshot, now
-from .mqtt_client import MqttBridge
+from .mqtt_client import DeviceRegistry, MqttBridge
 from .notify import Notifier
 from .state import StateMachine
 from .ups import run_ups_poller
@@ -42,6 +43,11 @@ machine = StateMachine(settings, cfg, db, notifier)
 # Settings persisted in the kv table and editable from the dashboard.
 _PW_HASH_KEY = "auth.password_hash"
 _GATEWAYAPI_TOKEN_KEY = "secret.gatewayapi_token"
+_DETECTORS_KEY = "config.detectors"
+
+# Devices discovered from Z2M's bridge/devices topic; shared with the bridge so
+# the detector setup page can list what is actually paired.
+registry = DeviceRegistry()
 
 # Password hash loaded at startup; None means auth is not yet configured, which
 # puts the dashboard into first-run setup mode (prompt to choose a password).
@@ -159,6 +165,21 @@ async def _load_persisted_settings() -> None:
         await db.set(_PW_HASH_KEY, _auth_pw_hash)
         log.info("migrated env FW_AUTH_PASSWORD into the settings store")
 
+    # Detectors: the DB store is authoritative once it exists. On first boot,
+    # seed it from config.yaml so existing deployments carry over and the
+    # dashboard becomes the single place to edit them from then on.
+    raw_detectors = await db.get(_DETECTORS_KEY)
+    if raw_detectors:
+        try:
+            detectors = [Detector(**d) for d in json.loads(raw_detectors)]
+            await machine.set_detectors(detectors)
+            log.info("loaded %d detector(s) from the settings store", len(detectors))
+        except (ValueError, ValidationError):
+            log.exception("stored detectors are corrupt; keeping config.yaml set")
+    elif cfg.detectors:
+        await db.set(_DETECTORS_KEY, json.dumps([d.model_dump() for d in cfg.detectors]))
+        log.info("seeded detector store from config.yaml (%d detectors)", len(cfg.detectors))
+
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -167,7 +188,7 @@ async def lifespan(_: FastAPI):
     await machine.restore()
     machine.add_listener(clients.push)
 
-    bridge = MqttBridge(settings, cfg, machine)
+    bridge = MqttBridge(settings, cfg, machine, registry)
     tasks = [
         asyncio.create_task(bridge.run(), name="mqtt"),
         asyncio.create_task(run_ups_poller(settings, machine), name="ups"),
@@ -453,6 +474,157 @@ async def set_gatewayapi_token(req: GatewayApiTokenRequest) -> JSONResponse:
     await db.audit("system", {"action": action}, severity="info", actor="settings")
     log.info("GatewayAPI token updated via settings (configured=%s)", bool(token))
     return JSONResponse({"ok": True, "configured": bool(token), "masked": _mask_token(token or None)})
+
+
+# ---- Detectors (dashboard-managed fire/heat alarm config) ----------------
+
+_DETECTORS_PAGE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FireWatch — Detectors</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.wrap{max-width:920px;margin:5vh auto;padding:0 16px}
+.wrap h1{font-size:1.2rem;color:var(--live);margin:0 0 4px}
+.wrap a.back{font-size:.82rem;color:var(--muted,#9aa);text-decoration:none}
+.card{margin-top:20px;padding:20px;background:var(--panel);border:1px solid var(--hairline);border-radius:14px}
+.card h2{font-size:1rem;margin:0 0 4px}
+.card p.hint{font-size:.8rem;color:var(--muted,#9aa);margin:0 0 14px}
+table{width:100%;border-collapse:collapse;font-size:.84rem}
+th{text-align:left;font-weight:600;color:var(--muted,#9aa);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;padding:6px 6px}
+td{padding:4px 6px;vertical-align:middle}
+tr+tr td{border-top:1px solid var(--hairline)}
+input,select{width:100%;padding:7px;background:var(--raised);border:1px solid var(--hairline);color:var(--text);border-radius:7px;font-family:var(--mono);font-size:.82rem;box-sizing:border-box}
+td.num input{width:64px}
+button{cursor:pointer;font-family:inherit}
+.iconbtn{background:transparent;border:1px solid var(--hairline);color:var(--alarm);border-radius:7px;padding:6px 9px;font-size:.8rem}
+.addbtn{margin-top:12px;padding:8px 14px;background:var(--raised);border:1px solid var(--hairline);color:var(--text);border-radius:8px;font-size:.84rem}
+.savebtn{margin-top:16px;padding:10px 18px;background:color-mix(in srgb,var(--live) 22%,var(--raised));border:1px solid color-mix(in srgb,var(--live) 50%,transparent);color:var(--text);border-radius:8px;font-weight:600;font-size:.9rem}
+.msg{font-size:.82rem;margin-top:10px;display:none}
+.msg.ok{color:var(--live)} .msg.err{color:var(--alarm)}
+.disc{display:flex;flex-wrap:wrap;gap:8px}
+.dev{flex:1 1 240px;padding:10px 12px;background:var(--raised);border:1px solid var(--hairline);border-radius:10px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.dev .meta{font-size:.7rem;color:var(--muted,#9aa)}
+.dev .nm{font-family:var(--mono);font-size:.84rem}
+.dev .tag{font-size:.66rem;text-transform:uppercase;letter-spacing:.04em;color:var(--live)}
+.dev button{padding:6px 10px;background:transparent;border:1px solid color-mix(in srgb,var(--live) 50%,transparent);color:var(--text);border-radius:7px;font-size:.78rem}
+.dev button:disabled{opacity:.45;cursor:default;border-color:var(--hairline)}
+.empty{color:var(--muted,#9aa);font-size:.82rem}
+</style></head><body>
+<div class="wrap">
+<a class="back" href="/">← back to dashboard</a>
+<h1>Detectors</h1>
+
+<div class="card">
+<h2>Discovered devices</h2>
+<p class="hint">Paired Zigbee devices reported by Zigbee2MQTT. Alarm-capable ones are listed first; “Add” pre-fills a row below.</p>
+<div class="disc" id="disc"><span class="empty">Loading…</span></div>
+</div>
+
+<div class="card">
+<h2>Monitored detectors</h2>
+<p class="hint">Each <code>friendly_name</code> must match Zigbee2MQTT exactly. <code>alarm_property</code> is the boolean field that goes true on detection (e.g. “smoke”, “heat”). EVENT mode silences only the zones you list as silent.</p>
+<table><thead><tr>
+<th>Label</th><th>Friendly name</th><th>Kind</th><th>Alarm prop</th><th>Zone</th><th title="Hours without a check-in before it is treated as a fault">Offline h</th><th></th>
+</tr></thead><tbody id="rows"></tbody></table>
+<button class="addbtn" id="addBtn">+ Add detector</button>
+<div><button class="savebtn" id="saveBtn">Save detectors</button></div>
+<p class="msg" id="msg"></p>
+</div>
+</div>
+<script>
+const KINDS=["smoke","heat","gas","other"];
+const rows=document.getElementById("rows");
+function cell(cls,inner){const td=document.createElement("td");if(cls)td.className=cls;td.appendChild(inner);return td}
+function inp(val,ph){const i=document.createElement("input");i.value=val??"";if(ph)i.placeholder=ph;return i}
+function addRow(d){d=d||{};const tr=document.createElement("tr");
+  const label=inp(d.label,"Stage left"),fn=inp(d.friendly_name,"heat_stage_left");
+  const kind=document.createElement("select");for(const k of KINDS){const o=document.createElement("option");o.value=o.textContent=k;if((d.kind||"heat")===k)o.selected=true;kind.appendChild(o)}
+  const prop=inp(d.alarm_property||"heat"),zone=inp(d.zone||"default");
+  const off=inp(d.offline_after_hours??6);off.type="number";off.step="0.5";off.min="0";
+  tr.append(cell("",label),cell("",fn),cell("",kind),cell("",prop),cell("",zone),cell("num",off));
+  const del=document.createElement("button");del.className="iconbtn";del.textContent="✕";del.title="Remove";del.onclick=()=>tr.remove();
+  tr.append(cell("",del));
+  tr._get=()=>({label:label.value.trim(),friendly_name:fn.value.trim(),kind:kind.value,
+    alarm_property:prop.value.trim(),zone:zone.value.trim()||"default",
+    offline_after_hours:parseFloat(off.value)||6});
+  rows.appendChild(tr);return tr}
+function show(ok,text){const m=document.getElementById("msg");m.textContent=text;m.className="msg "+(ok?"ok":"err");m.style.display="block"}
+document.getElementById("addBtn").onclick=()=>addRow();
+document.getElementById("saveBtn").onclick=async()=>{
+  const data=[...rows.children].map(tr=>tr._get());
+  const r=await fetch("/api/detectors",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
+  if(r.ok){show(true,"Saved "+data.length+" detector(s). Now monitored live — no restart needed.");loadDevices()}
+  else{const b=await r.json().catch(()=>({}));show(false,b.error||"Failed to save")}};
+async function loadDetectors(){const r=await fetch("/api/detectors");const d=await r.json();
+  rows.innerHTML="";(d.length?d:[{}]).forEach(addRow)}
+function configuredNames(){return new Set([...rows.children].map(tr=>tr._get().friendly_name))}
+async function loadDevices(){const el=document.getElementById("disc");
+  const r=await fetch("/api/devices");const d=await r.json();
+  if(!d.devices.length){el.innerHTML='<span class="empty">No devices reported yet — Z2M must be running and publishing bridge/devices.</span>';return}
+  const have=configuredNames();el.innerHTML="";
+  for(const dev of d.devices){const box=document.createElement("div");box.className="dev";
+    const left=document.createElement("div");
+    const nm=document.createElement("div");nm.className="nm";nm.textContent=dev.friendly_name;
+    const meta=document.createElement("div");meta.className="meta";
+    meta.textContent=[dev.vendor,dev.model].filter(Boolean).join(" ")||"unknown";
+    left.append(nm,meta);
+    if(dev.is_alarm_device){const t=document.createElement("div");t.className="tag";t.textContent=dev.alarm_properties.join(" / ");left.append(t)}
+    box.append(left);
+    const btn=document.createElement("button");
+    if(have.has(dev.friendly_name)||dev.configured){btn.textContent="added";btn.disabled=true}
+    else{btn.textContent="Add";btn.onclick=()=>{addRow({friendly_name:dev.friendly_name,
+      label:dev.description||dev.friendly_name,kind:dev.suggested_kind||"heat",
+      alarm_property:dev.suggested_alarm_property||"heat"});btn.textContent="added";btn.disabled=true}}
+    box.append(btn);el.append(box)}}
+loadDetectors().then(loadDevices);
+</script></body></html>"""
+
+
+@app.get("/api/detectors")
+async def get_detectors() -> JSONResponse:
+    return JSONResponse([d.model_dump() for d in cfg.detectors])
+
+
+@app.put("/api/detectors")
+async def put_detectors(detectors: list[Detector]) -> JSONResponse:
+    """Replace the full detector set. The dashboard saves the whole table."""
+    names = [d.friendly_name.strip() for d in detectors]
+    if any(not n for n in names):
+        return JSONResponse({"error": "every detector needs a friendly_name"}, status_code=400)
+    if len(set(names)) != len(names):
+        return JSONResponse({"error": "duplicate friendly_name"}, status_code=400)
+    if any(not d.alarm_property.strip() for d in detectors):
+        return JSONResponse({"error": "every detector needs an alarm_property"}, status_code=400)
+
+    await db.set(_DETECTORS_KEY, json.dumps([d.model_dump() for d in detectors]))
+    await machine.set_detectors(detectors)
+    await db.audit(
+        "system",
+        {"action": "detectors_updated", "count": len(detectors), "names": names},
+        severity="info",
+        actor="settings",
+    )
+    log.info("detector set updated via dashboard (%d detectors)", len(detectors))
+    return JSONResponse([d.model_dump() for d in detectors])
+
+
+@app.get("/api/devices")
+async def get_devices() -> JSONResponse:
+    """Devices discovered from Z2M, annotated with whether each is already
+    monitored. Empty until Z2M publishes its retained bridge/devices topic."""
+    configured = {d.friendly_name for d in cfg.detectors}
+    devices = registry.devices()
+    for d in devices:
+        d["configured"] = d["friendly_name"] in configured
+    return JSONResponse({
+        "last_seen": registry.last_seen.isoformat() if registry.last_seen else None,
+        "devices": devices,
+    })
+
+
+@app.get("/detectors", response_class=HTMLResponse)
+async def detectors_page():
+    return _DETECTORS_PAGE
 
 
 @app.get("/settings", response_class=HTMLResponse)
