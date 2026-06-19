@@ -95,7 +95,7 @@ function detRow(d) {
 function renderUps() {
   const el = $("ups");
   const u = state.ups;
-  if (!u) { el.innerHTML = '<span class="empty">No UPS configured</span>'; return; }
+  if (!u || !u.monitored) { el.innerHTML = '<span class="empty">Not monitored — no UPS wired</span>'; return; }
   const status = u.on_battery ? "ON BATTERY" : (u.online ? "online" : "unreachable");
   const bad = u.on_battery || u.low_battery || !u.online;
   el.innerHTML = `
@@ -202,6 +202,10 @@ document.querySelectorAll(".seg-btn").forEach((b) =>
     });
   })
 );
+
+// Zigbee2MQTT frontend lives on the same host, separate port.
+const Z2M_PORT = 8081;
+$("z2mLink").href = `${location.protocol}//${location.hostname}:${Z2M_PORT}`;
 
 // ---- utils ----
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }

@@ -26,11 +26,11 @@ async def _read_ups(ups_name: str) -> UpsState | None:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=10)
     except (OSError, asyncio.TimeoutError) as exc:
         log.warning("upsc failed: %s", exc)
-        return UpsState(online=False, last_seen=now())
+        return UpsState(monitored=True, online=False, last_seen=now())
 
     if proc.returncode != 0:
         log.warning("upsc rc=%s: %s", proc.returncode, err.decode()[:200])
-        return UpsState(online=False, last_seen=now())
+        return UpsState(monitored=True, online=False, last_seen=now())
 
     fields: dict[str, str] = {}
     for line in out.decode().splitlines():
@@ -41,6 +41,7 @@ async def _read_ups(ups_name: str) -> UpsState | None:
     status = fields.get("ups.status", "")
     charge = fields.get("battery.charge")
     return UpsState(
+        monitored=True,
         online=True,
         on_battery="OB" in status.split(),
         low_battery="LB" in status.split(),

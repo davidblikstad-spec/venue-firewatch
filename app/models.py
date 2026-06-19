@@ -41,6 +41,10 @@ class DetectorState(BaseModel):
 
 
 class UpsState(BaseModel):
+    # False until the NUT poller actually reads the UPS. Distinguishes
+    # "no UPS configured / not wired" from a UPS we've successfully reached,
+    # so the dashboard doesn't claim "online" for a UPS that isn't there.
+    monitored: bool = False
     online: bool = True
     on_battery: bool = False
     low_battery: bool = False
