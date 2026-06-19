@@ -52,11 +52,15 @@ async def _read_ups(ups_name: str) -> UpsState | None:
 
 
 async def run_ups_poller(settings: Settings, machine: StateMachine) -> None:
-    if not settings.ups_name:
-        log.info("UPS polling disabled (no FW_UPS_NAME set)")
-        return
+    # Re-read settings.ups_name each pass instead of bailing out once: the name
+    # can be set or cleared at runtime from the dashboard. While unconfigured we
+    # idle and re-check, so enabling it starts polling within a few seconds.
     while True:
-        ups = await _read_ups(settings.ups_name)
-        if ups is not None:
-            await machine.on_ups_update(ups)
-        await asyncio.sleep(settings.ups_poll_seconds)
+        name = settings.ups_name
+        if name:
+            ups = await _read_ups(name)
+            if ups is not None:
+                await machine.on_ups_update(ups)
+            await asyncio.sleep(settings.ups_poll_seconds)
+        else:
+            await asyncio.sleep(5)

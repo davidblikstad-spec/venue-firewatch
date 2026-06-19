@@ -236,6 +236,11 @@ class StateMachine:
 
     # ---- UPS ----------------------------------------------------------
 
+    async def clear_ups(self) -> None:
+        """Drop UPS state back to 'not monitored' when polling is disabled."""
+        self.ups = UpsState()
+        await self._publish()
+
     async def on_ups_update(self, ups: UpsState) -> None:
         prev_battery = self.ups.on_battery
         prev_low = self.ups.low_battery

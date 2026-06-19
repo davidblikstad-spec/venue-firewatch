@@ -25,7 +25,7 @@ from pydantic import BaseModel, ValidationError
 
 from .config import Detector, get_settings, load_yaml_config
 from .db import Database
-from .models import BalanceState, Mode, SmsPolicy, SystemSnapshot, now
+from .models import BalanceState, Mode, SmsPolicy, SystemSnapshot, UpsState, now
 from .mqtt_client import DeviceRegistry, MqttBridge
 from .notify import Notifier
 from .state import StateMachine
@@ -44,6 +44,8 @@ machine = StateMachine(settings, cfg, db, notifier)
 _PW_HASH_KEY = "auth.password_hash"
 _GATEWAYAPI_TOKEN_KEY = "secret.gatewayapi_token"
 _DETECTORS_KEY = "config.detectors"
+_UPS_NAME_KEY = "config.ups_name"
+_UPS_POLL_KEY = "config.ups_poll_seconds"
 
 # Devices discovered from Z2M's bridge/devices topic; shared with the bridge so
 # the detector setup page can list what is actually paired.
@@ -159,6 +161,16 @@ async def _load_persisted_settings() -> None:
     if token:
         settings.gatewayapi_token = token
 
+    # UPS: the kv store is authoritative once set from the dashboard. Use
+    # "key present" (not truthiness) so a deliberately-cleared name overrides
+    # any FW_UPS_NAME env value across restarts.
+    ups_name = await db.get(_UPS_NAME_KEY)
+    if ups_name is not None:
+        settings.ups_name = ups_name or None
+    ups_poll = await db.get(_UPS_POLL_KEY)
+    if ups_poll and ups_poll.isdigit():
+        settings.ups_poll_seconds = int(ups_poll)
+
     _auth_pw_hash = await db.get(_PW_HASH_KEY)
     if _auth_pw_hash is None and settings.auth_password:
         _auth_pw_hash = _hash_password(settings.auth_password)
@@ -270,6 +282,11 @@ class PasswordChangeRequest(BaseModel):
 
 class GatewayApiTokenRequest(BaseModel):
     token: str = ""  # empty clears the token (disables GatewayAPI)
+
+
+class UpsSettingsRequest(BaseModel):
+    ups_name: str = ""              # NUT name e.g. "myups@localhost"; empty disables
+    poll_seconds: int | None = None  # optional; unchanged if omitted
 
 
 # ---- Auth endpoints ------------------------------------------------------
@@ -442,6 +459,13 @@ async def get_settings_status() -> JSONResponse:
             "masked": _mask_token(settings.gatewayapi_token),
             "sender": settings.gatewayapi_sender,
         },
+        "ups": {
+            "name": settings.ups_name or "",
+            "poll_seconds": settings.ups_poll_seconds,
+            "monitored": bool(machine.ups and machine.ups.monitored),
+            "status": (machine.ups.raw_status if machine.ups else None),
+            "online": bool(machine.ups and machine.ups.online),
+        },
     })
 
 
@@ -474,6 +498,29 @@ async def set_gatewayapi_token(req: GatewayApiTokenRequest) -> JSONResponse:
     await db.audit("system", {"action": action}, severity="info", actor="settings")
     log.info("GatewayAPI token updated via settings (configured=%s)", bool(token))
     return JSONResponse({"ok": True, "configured": bool(token), "masked": _mask_token(token or None)})
+
+
+@app.post("/api/settings/ups")
+async def set_ups(req: UpsSettingsRequest) -> JSONResponse:
+    if req.poll_seconds is not None:
+        if req.poll_seconds < 5:
+            return JSONResponse({"error": "poll interval must be at least 5 seconds"}, status_code=400)
+        settings.ups_poll_seconds = req.poll_seconds
+        await db.set(_UPS_POLL_KEY, str(req.poll_seconds))
+
+    name = req.ups_name.strip()
+    if name:
+        settings.ups_name = name
+        await db.set(_UPS_NAME_KEY, name)
+        action = "ups_configured"
+    else:
+        settings.ups_name = None
+        await db.set(_UPS_NAME_KEY, "")
+        await machine.clear_ups()  # poller stops; reset the dashboard display
+        action = "ups_cleared"
+    await db.audit("system", {"action": action, "ups_name": name or None}, severity="info", actor="settings")
+    log.info("UPS settings updated (name=%s, poll=%ss)", name or "(none)", settings.ups_poll_seconds)
+    return JSONResponse({"ok": True, "name": name, "poll_seconds": settings.ups_poll_seconds})
 
 
 # ---- Detectors (dashboard-managed fire/heat alarm config) ----------------
@@ -666,12 +713,26 @@ async def settings_page():
 <button id="gwBtn">Save token</button>
 <p class="msg" id="gwMsg"></p>
 </div>
+
+<div class="card">
+<h2>UPS (NUT)</h2>
+<p class="status" id="upsStatus">Loading…</p>
+<label for="upsName">UPS name</label><input type="text" id="upsName" placeholder="e.g. myups@localhost — blank to disable">
+<label for="upsPoll">Poll interval (seconds)</label><input type="number" id="upsPoll" min="5" step="5">
+<button id="upsBtn">Save UPS</button>
+<p class="msg" id="upsMsg"></p>
+</div>
 </div>
 <script>
 function show(el,ok,text){el.textContent=text;el.className="msg "+(ok?"ok":"err");el.style.display="block"}
 async function refresh(){const r=await fetch("/api/settings");const d=await r.json();
   const g=d.gatewayapi;document.getElementById("gwStatus").textContent=
-    g.configured?("Configured (token "+g.masked+"), sender “"+g.sender+"”"):("Not configured — SMS via GatewayAPI is disabled. Sender “"+g.sender+"”.");}
+    g.configured?("Configured (token "+g.masked+"), sender “"+g.sender+"”"):("Not configured — SMS via GatewayAPI is disabled. Sender “"+g.sender+"”.");
+  const u=d.ups;const us=document.getElementById("upsStatus");
+  if(!u.name){us.textContent="Not configured — no UPS monitored."}
+  else{us.textContent="Monitoring “"+u.name+"” — "+(u.monitored?(u.online?("reachable"+(u.status?" ("+u.status+")"):"")):"not reachable yet")+", every "+u.poll_seconds+"s."}
+  if(document.activeElement!==document.getElementById("upsName"))document.getElementById("upsName").value=u.name||"";
+  if(document.activeElement!==document.getElementById("upsPoll"))document.getElementById("upsPoll").value=u.poll_seconds;}
 document.getElementById("pwBtn").onclick=async()=>{const m=document.getElementById("pwMsg");
   const cur=document.getElementById("cur").value,np=document.getElementById("np").value,np2=document.getElementById("np2").value;
   if(np.length<8){show(m,false,"New password must be at least 8 characters");return}
@@ -686,6 +747,13 @@ document.getElementById("gwBtn").onclick=async()=>{const m=document.getElementBy
   const r=await fetch("/api/settings/gatewayapi",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({token:tok})});
   if(r.ok){show(m,true,tok.trim()?"Token saved.":"Token cleared.");document.getElementById("tok").value="";refresh();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+document.getElementById("upsBtn").onclick=async()=>{const m=document.getElementById("upsMsg");
+  const name=document.getElementById("upsName").value.trim();
+  const poll=parseInt(document.getElementById("upsPoll").value,10);
+  const body={ups_name:name};if(!isNaN(poll))body.poll_seconds=poll;
+  const r=await fetch("/api/settings/ups",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(r.ok){show(m,true,name?"Saved — polling “"+name+"”.":"UPS monitoring disabled.");refresh();}
   else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
 refresh();
 </script></body></html>"""
