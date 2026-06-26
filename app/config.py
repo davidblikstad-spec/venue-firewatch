@@ -111,6 +111,10 @@ class Detector(BaseModel):
 
 
 class YamlConfig(BaseModel):
+    # Site name shown in the dashboard header and prefixed to every SMS so
+    # recipients know which venue an alert is from. Editable from the dashboard
+    # (kv-stored, authoritative once set); this only seeds the first boot.
+    venue_name: str = ""
     recipients: list[Recipient] = Field(default_factory=list)
     detectors: list[Detector] = Field(default_factory=list)
     # Zones that EVENT mode silences. Detectors in other zones still alert.

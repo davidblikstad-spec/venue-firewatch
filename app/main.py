@@ -45,6 +45,7 @@ machine = StateMachine(settings, cfg, db, notifier)
 # Settings persisted in the kv table and editable from the dashboard.
 _PW_HASH_KEY = "auth.password_hash"
 _GATEWAYAPI_TOKEN_KEY = "secret.gatewayapi_token"
+_VENUE_KEY = "config.venue_name"
 _DETECTORS_KEY = "config.detectors"
 _RECIPIENTS_KEY = "config.recipients"
 _UPS_NAME_KEY = "config.ups_name"
@@ -164,6 +165,14 @@ async def _load_persisted_settings() -> None:
     token = await db.get(_GATEWAYAPI_TOKEN_KEY)
     if token:
         settings.gatewayapi_token = token
+
+    # Venue name: kv store authoritative once set; seed it from config.yaml on
+    # first boot so the dashboard owns it thereafter.
+    venue = await db.get(_VENUE_KEY)
+    if venue is not None:
+        machine.venue = venue.strip()
+    elif machine.venue:
+        await db.set(_VENUE_KEY, machine.venue)
 
     # UPS: the kv store is authoritative once set from the dashboard. Use
     # "key present" (not truthiness) so a deliberately-cleared name overrides
@@ -483,6 +492,7 @@ def _mask_token(token: str | None) -> str:
 async def get_settings_status() -> JSONResponse:
     return JSONResponse({
         "auth_configured": _auth_configured(),
+        "venue": machine.venue,
         "gatewayapi": {
             "configured": bool(settings.gatewayapi_token),
             "masked": _mask_token(settings.gatewayapi_token),
@@ -528,6 +538,20 @@ async def set_gatewayapi_token(req: GatewayApiTokenRequest) -> JSONResponse:
     await db.audit("system", {"action": action}, severity="info", actor="settings")
     log.info("GatewayAPI token updated via settings (configured=%s)", bool(token))
     return JSONResponse({"ok": True, "configured": bool(token), "masked": _mask_token(token or None)})
+
+
+class VenueRequest(BaseModel):
+    name: str = ""
+
+
+@app.post("/api/settings/venue")
+async def set_venue(req: VenueRequest) -> JSONResponse:
+    name = req.name.strip()[:40]
+    await db.set(_VENUE_KEY, name)
+    await machine.set_venue(name)  # publishes a snapshot so the header updates live
+    await db.audit("system", {"action": "venue_set", "venue": name}, severity="info", actor="settings")
+    log.info("venue name set to %r", name)
+    return JSONResponse({"ok": True, "venue": name})
 
 
 class TemplatesRequest(BaseModel):
@@ -848,7 +872,8 @@ async def settings_page():
 <nav class="sidenav">
 <h1>Settings</h1>
 <a class="back" href="/">← back to dashboard</a>
-<button class="nav active" data-sec="security">Security</button>
+<button class="nav active" data-sec="general">Venue</button>
+<button class="nav" data-sec="security">Security</button>
 <button class="nav" data-sec="sms">SMS / GatewayAPI</button>
 <button class="nav" data-sec="receivers">Receivers</button>
 <button class="nav" data-sec="messages">Messages</button>
@@ -856,7 +881,17 @@ async def settings_page():
 </nav>
 <div class="content">
 
-<section class="section active" id="sec-security">
+<section class="section active" id="sec-general">
+<div class="card">
+<h2>Venue name</h2>
+<p class="status">Shown in the dashboard header and prefixed to every SMS alert, so recipients know which site an alert is from. Leave blank to use “FireWatch”.</p>
+<label for="venue">Venue name</label><input type="text" id="venue" maxlength="40" placeholder="e.g. Tivoli Hall">
+<button id="venueBtn">Save venue</button>
+<p class="msg" id="venueMsg"></p>
+</div>
+</section>
+
+<section class="section" id="sec-security">
 <div class="card">
 <h2>Dashboard password</h2>
 <label for="cur">Current password</label><input type="password" id="cur">
@@ -943,6 +978,7 @@ document.querySelectorAll(".sidenav button.nav").forEach(b=>b.onclick=()=>{
   location.hash=b.dataset.sec;});
 if(location.hash){const b=document.querySelector('.sidenav button[data-sec="'+location.hash.slice(1)+'"]');if(b)b.click();}
 async function refresh(){const r=await fetch("/api/settings");const d=await r.json();
+  if(document.activeElement!==document.getElementById("venue"))document.getElementById("venue").value=d.venue||"";
   const g=d.gatewayapi;document.getElementById("gwStatus").textContent=
     g.configured?("Configured (token "+g.masked+"), sender “"+g.sender+"”"):("Not configured — SMS via GatewayAPI is disabled. Sender “"+g.sender+"”.");
   const u=d.ups;const us=document.getElementById("upsStatus");
@@ -961,6 +997,11 @@ document.getElementById("policyBtn").onclick=async()=>{const m=document.getEleme
   const policy=document.getElementById("policy").value;
   const r=await fetch("/api/sms/policy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({policy})});
   if(r.ok){show(m,true,"Policy saved — "+policy+".");refresh();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+document.getElementById("venueBtn").onclick=async()=>{const m=document.getElementById("venueMsg");
+  const name=document.getElementById("venue").value.trim();
+  const r=await fetch("/api/settings/venue",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
+  if(r.ok){show(m,true,name?"Saved — “"+name+"”.":"Cleared — using “FireWatch”.");refresh();}
   else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
 document.getElementById("pwBtn").onclick=async()=>{const m=document.getElementById("pwMsg");
   const cur=document.getElementById("cur").value,np=document.getElementById("np").value,np2=document.getElementById("np2").value;

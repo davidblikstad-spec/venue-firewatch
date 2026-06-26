@@ -98,6 +98,7 @@ class WanState(BaseModel):
 class SystemSnapshot(BaseModel):
     """Everything the dashboard needs in one push."""
 
+    venue: str = ""          # site name for the header; empty -> "FireWatch"
     mode: Mode = Mode.NORMAL
     sms_policy: SmsPolicy = SmsPolicy.FAILOVER
     event_until: datetime | None = None

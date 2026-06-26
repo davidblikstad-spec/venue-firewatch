@@ -54,6 +54,7 @@ class StateMachine:
         self._db = db
         self._notifier = notifier
 
+        self.venue: str = (cfg.venue_name or "").strip()
         self.mode: Mode = Mode.NORMAL
         self.sms_policy: SmsPolicy = SmsPolicy.FAILOVER
         self.event_until: datetime | None = None
@@ -137,6 +138,7 @@ class StateMachine:
 
     def snapshot(self) -> SystemSnapshot:
         return SystemSnapshot(
+            venue=self.venue,
             mode=self.mode,
             sms_policy=self.sms_policy,
             event_until=self.event_until,
@@ -369,14 +371,25 @@ class StateMachine:
 
     # ---- alerting -----------------------------------------------------
 
+    def brand(self) -> str:
+        """Name that identifies this site in messages; falls back to FireWatch."""
+        return self.venue or "FireWatch"
+
     def _msg(self, key: str, **ctx) -> str:
-        """Render an alert's SMS text from the operator template (or the default)."""
+        """Render an alert's SMS text from the operator template (or the default),
+        prefixed with the venue/brand so recipients know which site it's from."""
         template = self.templates.get(key) or tmpl.default_text(key)
-        return tmpl.render(template, ctx)
+        return f"{self.brand()}: {tmpl.render(template, ctx)}"
 
     def set_templates(self, overrides: dict[str, str]) -> None:
         """Replace the live SMS-template overrides (kept persisted by the caller)."""
         self.templates = {k: v for k, v in overrides.items() if k in tmpl.SMS_TEMPLATES and v}
+
+    async def set_venue(self, name: str) -> None:
+        """Set the site name shown in the header and prefixed to SMS; publishes
+        so the dashboard heading updates live."""
+        self.venue = (name or "").strip()
+        await self._publish()
 
     def status_summary(self) -> str:
         """One SMS summarising every important status — used by the test message."""
@@ -385,7 +398,7 @@ class StateMachine:
         in_alarm = sum(1 for d in dets if d.alarm)
         low_batt = sum(1 for d in dets if d.battery is not None and d.battery <= 10)
         # Local time for the operator (now() is UTC); .astimezone() -> system tz.
-        lines = [f"FireWatch TEST {now().astimezone():%Y-%m-%d %H:%M}"]
+        lines = [f"{self.brand()} TEST {now().astimezone():%Y-%m-%d %H:%M}"]
         lines.append(f"Mode: {self.mode.value.upper()}")
         lines.append(f"Detectors: {online}/{len(dets)} online, {in_alarm} in alarm, {low_batt} low battery")
         u = self.ups

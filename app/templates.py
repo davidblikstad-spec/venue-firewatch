@@ -7,6 +7,10 @@ and held live on the StateMachine, so edits take effect with no restart).
 Templates use ``{placeholder}`` fields filled from the event context. Unknown
 placeholders are left visible (``{foo}``) rather than crashing, so a typo in the
 UI is obvious instead of silently dropping the message.
+
+Every rendered message is prefixed with the venue name (or "FireWatch" when no
+venue is set) by ``StateMachine._msg``, so these defaults no longer carry their
+own "FireWatch:" prefix — don't add it back here or it will be doubled.
 """
 from __future__ import annotations
 
@@ -20,37 +24,37 @@ SMS_TEMPLATES: dict[str, dict] = {
     "detector_offline": {
         "label": "Detector offline (no check-in)",
         "placeholders": ["label", "zone"],
-        "default": "FireWatch: detector {label} in {zone} went offline (no check-in). Check the device.",
+        "default": "detector {label} in {zone} went offline (no check-in). Check the device.",
     },
     "detector_low_battery": {
         "label": "Detector battery low",
         "placeholders": ["label", "battery"],
-        "default": "FireWatch: low battery on detector {label} ({battery}%). Replace the battery soon.",
+        "default": "low battery on detector {label} ({battery}%). Replace the battery soon.",
     },
     "ups_on_battery": {
         "label": "Mains lost — UPS on backup power",
         "placeholders": ["charge", "runtime_min", "grid_voltage", "load"],
-        "default": "FireWatch: MAINS POWER LOST. UPS on backup ({charge}% battery, ~{runtime_min} min runtime).",
+        "default": "MAINS POWER LOST. UPS on backup ({charge}% battery, ~{runtime_min} min runtime).",
     },
     "ups_low_battery": {
         "label": "UPS battery critically low",
         "placeholders": ["charge", "runtime_min"],
-        "default": "FireWatch: UPS battery CRITICALLY LOW ({charge}%) — shutdown imminent.",
+        "default": "UPS battery CRITICALLY LOW ({charge}%) — shutdown imminent.",
     },
     "ups_restored": {
         "label": "Mains power restored",
         "placeholders": ["grid_voltage"],
-        "default": "FireWatch: mains power restored ({grid_voltage}V). UPS back on line power.",
+        "default": "mains power restored ({grid_voltage}V). UPS back on line power.",
     },
     "sms_failover": {
         "label": "Failover to TRM240 cellular",
         "placeholders": [],
-        "default": "FireWatch: primary SMS path (GatewayAPI) is down — now sending via TRM240 cellular network.",
+        "default": "primary SMS path (GatewayAPI) is down — now sending via TRM240 cellular network.",
     },
     "wan_changed": {
         "label": "Internet path changed (WAN failover)",
         "placeholders": ["active", "summary"],
-        "default": "FireWatch: internet path changed — now using {active}. Links: {summary}",
+        "default": "internet path changed — now using {active}. Links: {summary}",
     },
 }
 

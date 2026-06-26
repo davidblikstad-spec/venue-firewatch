@@ -60,6 +60,11 @@ function render() {
   const mode = anyAlarm(state) ? "alarm" : state.mode;
   html.dataset.mode = mode;
 
+  // Venue name in the header (and page title); falls back to the default sub.
+  const venue = (state.venue || "").trim();
+  $("brandSub").textContent = venue || "secondary monitor";
+  document.title = venue ? `${venue} — FireWatch` : "Venue FireWatch";
+
   // Banner
   $("bannerMode").textContent = anyAlarm(state) ? "ALARM" : state.mode.toUpperCase();
   if (anyAlarm(state)) {
