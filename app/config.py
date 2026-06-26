@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     ups_name: str | None = None  # e.g. "myups@localhost"; None disables polling
     ups_poll_seconds: int = 30
 
+    # --- WAN / internet failover ---
+    # Status file written by the root failover worker (setup-wan-failover.sh).
+    # If fresh, it's authoritative; otherwise the dashboard derives WAN status
+    # itself (read-only, no root). See app/wan.py.
+    wan_status_path: str = "/run/wan-failover/status.json"
+    wan_status_max_age_s: int = 120
+    wan_poll_seconds: int = 5
+
     # --- Event mode ---
     # Hard ceiling on how long EVENT (silent) mode may stay armed, regardless of
     # the end time chosen by the operator. A safety backstop against "left on".

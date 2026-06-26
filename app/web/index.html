@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Venue FireWatch</title>
-  <link rel="stylesheet" href="/style.css?v=4" />
+  <link rel="stylesheet" href="/style.css?v=5" />
 </head>
 <body>
   <header class="topbar">
@@ -45,7 +45,9 @@
     </section>
 
     <section class="card" id="upsCard">
-      <h2 class="card-title">Power / UPS</h2>
+      <h2 class="card-title">Internet</h2>
+      <div class="wan" id="wan"><span class="empty">Checking…</span></div>
+      <h2 class="card-title spaced">Power / UPS</h2>
       <div class="ups" id="ups"><span class="empty">No UPS configured</span></div>
       <h2 class="card-title spaced">SMS balance</h2>
       <div class="ups" id="balance"><span class="empty">Not checked</span></div>
@@ -81,6 +83,6 @@
   </main>
 
   <!-- Bump ?v= when app.js/style.css change so browsers fetch the new file. -->
-  <script src="/app.js?v=4"></script>
+  <script src="/app.js?v=5"></script>
 </body>
 </html>

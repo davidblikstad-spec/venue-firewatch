@@ -30,6 +30,7 @@ from .mqtt_client import DeviceRegistry, MqttBridge
 from .notify import Notifier
 from .state import StateMachine
 from .ups import run_ups_poller, scan_ups
+from .wan import run_wan_poller
 from . import templates as sms_templates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -231,6 +232,7 @@ async def lifespan(_: FastAPI):
     tasks = [
         asyncio.create_task(bridge.run(), name="mqtt"),
         asyncio.create_task(run_ups_poller(settings, machine), name="ups"),
+        asyncio.create_task(run_wan_poller(settings, machine), name="wan"),
         asyncio.create_task(_tick_loop(), name="tick"),
         asyncio.create_task(_balance_loop(), name="balance"),
     ]

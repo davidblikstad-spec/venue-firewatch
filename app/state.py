@@ -24,6 +24,7 @@ from .models import (
     SmsPolicy,
     SystemSnapshot,
     UpsState,
+    WanState,
     now,
 )
 from .notify import Notifier
@@ -59,6 +60,7 @@ class StateMachine:
         self.ups = UpsState()
         self.balance = BalanceState()
         self.link = LinkState()
+        self.wan = WanState()
         self._alert_counter = 0
         self._active_alerts: dict[str, dict] = {}
         # Operator-editable SMS text. Holds overrides only; missing keys fall
@@ -142,6 +144,7 @@ class StateMachine:
             ups=self.ups,
             balance=self.balance,
             link=self.link,
+            wan=self.wan,
         )
 
     async def _publish(self) -> None:
@@ -320,6 +323,48 @@ class StateMachine:
             )
         await self._publish()
 
+    async def on_wan_update(self, wan: WanState) -> None:
+        """Refresh the internet-uplink view and SMS recipients if the active
+        path changed (e.g. wired WAN died and we're now on cellular)."""
+        prev_active = self.wan.active
+        had_data = self.wan.monitored
+        self.wan = wan
+        # Only announce a *change*, never the first reading after boot.
+        if wan.monitored and had_data and wan.active != prev_active:
+            await self._announce_wan_change(prev_active)
+        await self._publish()
+
+    async def _announce_wan_change(self, prev_active: str | None) -> None:
+        """Notify all recipients that the internet path changed, listing links."""
+        active_label = "no internet"
+        for a in self.wan.adapters:
+            if a.active:
+                active_label = a.label
+                break
+        summary = "; ".join(
+            f"{a.label}: " + ("IN USE" if a.active else "up" if a.link else "down")
+            for a in self.wan.adapters
+        ) or "none"
+        text = self._msg("wan_changed", active=active_label, summary=summary)
+
+        recips = sorted(self._cfg.recipients, key=lambda r: r.priority)
+        msisdns = [r.msisdn for r in recips]
+        log.warning("WAN path changed (%s -> %s); notifying %d recipient(s)",
+                    prev_active, self.wan.active, len(msisdns))
+        results = (await self._notifier.broadcast(msisdns, text, self.sms_policy)
+                   if msisdns else {})
+        for msisdn, send_results in results.items():
+            for sr in send_results:
+                if sr.ok:
+                    await self._db.track_sms(sr.message_id, msisdn, text, sr.transport, "wan_change")
+        await self._db.audit(
+            "wan",
+            {"text": text, "kind": "wan_change", "from": prev_active, "to": self.wan.active,
+             "adapters": [a.model_dump() for a in self.wan.adapters]},
+            severity=Severity.WARNING.value,
+            actor="wan",
+        )
+
     # ---- alerting -----------------------------------------------------
 
     def _msg(self, key: str, **ctx) -> str:
@@ -359,6 +404,11 @@ class StateMachine:
             f"Zigbee: {'online' if self.link.zigbee_online else 'OFFLINE'}, "
             f"broker {'up' if self.link.mqtt_connected else 'DOWN'}"
         )
+        if self.wan.monitored:
+            active = next((a.label for a in self.wan.adapters if a.active), None)
+            up = [a.label for a in self.wan.adapters if a.link]
+            lines.append(f"Internet: {active or 'DOWN'}" +
+                         (f" (links up: {', '.join(up)})" if up else ""))
         if self.balance.credit is not None:
             lines.append(f"SMS credit: {self.balance.credit:.0f}")
         lines.append("This is a test — no action needed.")

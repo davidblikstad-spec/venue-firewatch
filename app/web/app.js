@@ -82,6 +82,9 @@ function render() {
   // Zigbee/MQTT pipeline health
   renderLink();
 
+  // Internet uplinks
+  renderWan();
+
   // UPS
   renderUps();
 
@@ -133,6 +136,32 @@ function renderUps() {
     ${u.charge_pct != null ? `<div><span class="k">charge </span>${u.charge_pct}%</div>` : ""}
     ${runtime != null ? `<div><span class="k">runtime </span>${runtime}</div>` : ""}
     ${u.low_battery ? '<div class="ups-bad">LOW BATTERY</div>' : ""}`;
+}
+
+function renderWan() {
+  const el = $("wan");
+  const w = state.wan;
+  if (!w || !w.monitored || !w.adapters || !w.adapters.length) {
+    el.innerHTML = '<span class="empty">No uplink data</span>';
+    return;
+  }
+  const rows = w.adapters.map((a) => {
+    let cls, label;
+    if (a.active) { cls = "wan-active"; label = "in use"; }
+    else if (a.link) { cls = "wan-standby"; label = "standby"; }
+    else { cls = "wan-down"; label = "down"; }
+    const meta = [a.ip, a.metric != null ? `m${a.metric}` : null].filter(Boolean).join("  ·  ");
+    return `<div class="wan-row">
+      <span class="led"></span>
+      <span class="wan-name">${esc(a.label)}</span>
+      <span class="wan-meta">${esc(meta)}</span>
+      <span class="${cls}">${label}</span>
+    </div>`;
+  }).join("");
+  // No adapter active == the box currently has no internet at all.
+  const none = w.adapters.every((a) => !a.active)
+    ? '<div class="ups-bad">No internet — all uplinks down</div>' : "";
+  el.innerHTML = rows + none;
 }
 
 function renderBalance() {

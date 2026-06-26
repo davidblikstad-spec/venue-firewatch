@@ -136,6 +136,18 @@ html[data-mode="alarm"] .banner-mode { animation: pulse 1.1s ease-in-out infinit
 .ups .k { color: var(--muted); }
 .ups-bad { color: var(--alarm); }
 
+/* --- Internet uplinks --- */
+.wan { font-family: var(--mono); font-size: .9rem; display: flex; flex-direction: column; gap: 6px; }
+.wan-row { display: flex; align-items: center; gap: 8px; }
+.wan-row .led { width: 9px; height: 9px; box-shadow: none; background: var(--hairline); }
+.wan-row .wan-name { flex: 1; }
+.wan-meta { color: var(--muted); font-size: .78rem; }
+.wan-active { color: var(--live); text-transform: uppercase; font-size: .72rem; }
+.wan-standby { color: var(--muted); font-size: .72rem; }
+.wan-down { color: var(--alarm); font-size: .72rem; }
+.wan-row:has(.wan-active) .led { background: var(--live); box-shadow: 0 0 8px var(--live); }
+.wan-row:has(.wan-down) .led { background: var(--alarm); }
+
 /* --- Controls --- */
 .hint { color: var(--muted); font-size: .82rem; margin: 0 0 14px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }

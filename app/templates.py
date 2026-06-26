@@ -47,6 +47,11 @@ SMS_TEMPLATES: dict[str, dict] = {
         "placeholders": [],
         "default": "FireWatch: primary SMS path (GatewayAPI) is down — now sending via TRM240 cellular network.",
     },
+    "wan_changed": {
+        "label": "Internet path changed (WAN failover)",
+        "placeholders": ["active", "summary"],
+        "default": "FireWatch: internet path changed — now using {active}. Links: {summary}",
+    },
 }
 
 

@@ -73,6 +73,27 @@ class LinkState(BaseModel):
     last_message: datetime | None = None
 
 
+class WanAdapter(BaseModel):
+    iface: str
+    label: str                      # friendly name, e.g. "Wired (primary)"
+    link: bool = False              # carrier present (cable in / radio attached)
+    internet: bool = False          # reachable upstream (best-effort; accurate only from the root probe)
+    active: bool = False            # the path the box is currently using for internet
+    metric: int | None = None       # default-route metric (lower = preferred)
+    ip: str | None = None
+
+
+class WanState(BaseModel):
+    """Internet uplinks and which one is in use. Fed by the wan poller, which
+    prefers the root failover worker's status file and falls back to a
+    read-only local derivation when that file is absent."""
+    monitored: bool = False         # False until we have any data
+    active: str | None = None       # iface currently carrying internet, or None
+    source: str = "local"           # "worker" (root status file) or "local" (derived)
+    adapters: list[WanAdapter] = Field(default_factory=list)
+    updated: datetime | None = None
+
+
 class SystemSnapshot(BaseModel):
     """Everything the dashboard needs in one push."""
 
@@ -83,4 +104,5 @@ class SystemSnapshot(BaseModel):
     ups: UpsState | None = None
     balance: BalanceState | None = None
     link: LinkState = Field(default_factory=LinkState)
+    wan: WanState | None = None
     updated_at: datetime = Field(default_factory=now)
