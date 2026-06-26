@@ -123,9 +123,15 @@ function renderUps() {
   if (!u || !u.monitored) { el.innerHTML = '<span class="empty">Not monitored — no UPS wired</span>'; return; }
   const status = u.on_battery ? "ON BATTERY" : (u.online ? "online" : "unreachable");
   const bad = u.on_battery || u.low_battery || !u.online;
+  const runtime = u.runtime_s != null
+    ? (u.runtime_s >= 60 ? `${Math.round(u.runtime_s / 60)} min` : `${u.runtime_s}s`)
+    : null;
   el.innerHTML = `
     <div><span class="k">status </span><span class="${bad ? "ups-bad" : ""}">${status}</span></div>
+    ${u.grid_voltage != null ? `<div><span class="k">grid </span>${u.grid_voltage.toFixed(0)} V</div>` : ""}
+    ${u.load_pct != null ? `<div><span class="k">load </span>${u.load_pct}%</div>` : ""}
     ${u.charge_pct != null ? `<div><span class="k">charge </span>${u.charge_pct}%</div>` : ""}
+    ${runtime != null ? `<div><span class="k">runtime </span>${runtime}</div>` : ""}
     ${u.low_battery ? '<div class="ups-bad">LOW BATTERY</div>' : ""}`;
 }
 

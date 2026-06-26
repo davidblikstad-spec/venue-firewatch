@@ -12,8 +12,9 @@ import logging
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable
 
-from .config import Detector, Settings, YamlConfig
+from .config import Detector, Recipient, Settings, YamlConfig
 from .db import Database
+from . import templates as tmpl
 from .models import (
     BalanceState,
     DetectorState,
@@ -31,6 +32,12 @@ log = logging.getLogger("firewatch.state")
 
 # Called whenever state changes so the web layer can push to connected clients.
 Listener = Callable[[SystemSnapshot], Awaitable[None]]
+
+
+def _mains_present(grid_voltage: float | None) -> bool:
+    """True when input.voltage looks like live mains (not the 0V an on-battery
+    UPS reports). 50V is well below any real mains yet above the on-battery 0."""
+    return grid_voltage is not None and grid_voltage > 50
 
 
 class StateMachine:
@@ -54,6 +61,11 @@ class StateMachine:
         self.link = LinkState()
         self._alert_counter = 0
         self._active_alerts: dict[str, dict] = {}
+        # Operator-editable SMS text. Holds overrides only; missing keys fall
+        # back to the built-in default. Populated from the kv store at startup.
+        self.templates: dict[str, str] = {}
+        self._primary_down = False  # True once GatewayAPI has failed and we're on the modem
+        self._restore_pending = False  # mains came back; awaiting a real voltage to announce
 
         self._detectors: dict[str, DetectorState] = {
             d.friendly_name: DetectorState(
@@ -97,6 +109,14 @@ class StateMachine:
                 )
         self._detectors = rebuilt
         await self._publish()
+
+    def set_recipients(self, recipients: list[Recipient]) -> None:
+        """Replace the alert-recipient list at runtime (dashboard-driven).
+
+        Read live by `_raise`/escalation off `self._cfg.recipients`, so an edit
+        applies to the next alert with no reconnect or restart.
+        """
+        self._cfg.recipients = recipients
 
     async def restore(self) -> None:
         """Resume mode/policy from the DB after a restart."""
@@ -186,7 +206,7 @@ class StateMachine:
                     if offline:
                         await self._raise(
                             Severity.WARNING,
-                            f"Detector offline: {det.label} (no check-in)",
+                            self._msg("detector_offline", label=det.label, zone=det.zone),
                             actor="supervision",
                         )
         if changed:
@@ -215,7 +235,7 @@ class StateMachine:
         if det.alarm and not was_alarm:
             await self._handle_alarm(det)
         elif det.battery is not None and det.battery <= 10:
-            await self._raise(Severity.WARNING, f"Low battery: {det.label} ({det.battery}%)", actor="supervision")
+            await self._raise(Severity.WARNING, self._msg("detector_low_battery", label=det.label, battery=det.battery), actor="supervision")
 
         await self._publish()
 
@@ -234,7 +254,7 @@ class StateMachine:
             return
         await self._raise(
             Severity.CRITICAL,
-            f"ALARM: {det.label} ({det.kind}) detected. Temp {det.temperature}C.",
+            self._msg("alarm", label=det.label, kind=det.kind, zone=det.zone, temperature=det.temperature),
             actor="detector",
         )
 
@@ -265,17 +285,145 @@ class StateMachine:
         await self._publish()
 
     async def on_ups_update(self, ups: UpsState) -> None:
+        prev_monitored = self.ups.monitored
         prev_battery = self.ups.on_battery
         prev_low = self.ups.low_battery
         self.ups = ups
+        runtime_min = round(ups.runtime_s / 60) if ups.runtime_s is not None else None
         # Power events are NEVER silenced by EVENT mode.
         if ups.on_battery and not prev_battery:
-            await self._raise(Severity.WARNING, "Mains power lost — UPS on battery.", actor="ups")
+            self._restore_pending = False  # a new outage cancels any pending restore
+            await self._raise(
+                Severity.WARNING,
+                self._msg("ups_on_battery", charge=ups.charge_pct, runtime_min=runtime_min,
+                          grid_voltage=ups.grid_voltage, load=ups.load_pct),
+                actor="ups",
+            )
+        # Mains restored: arm on the recovery transition (prev_monitored guards the
+        # cold start), but DON'T announce until the UPS reports a real mains voltage.
+        # This APC reads input.voltage=0 while on battery and for a poll or two after
+        # power returns, so firing immediately would send "restored (0V)".
+        if prev_monitored and prev_battery and not ups.on_battery:
+            self._restore_pending = True
+        if self._restore_pending and not ups.on_battery and _mains_present(ups.grid_voltage):
+            self._restore_pending = False
+            await self._raise(
+                Severity.INFO,
+                self._msg("ups_restored", grid_voltage=round(ups.grid_voltage)),
+                actor="ups",
+            )
         if ups.low_battery and not prev_low:
-            await self._raise(Severity.CRITICAL, "UPS battery LOW — shutdown imminent.", actor="ups")
+            await self._raise(
+                Severity.CRITICAL,
+                self._msg("ups_low_battery", charge=ups.charge_pct, runtime_min=runtime_min),
+                actor="ups",
+            )
         await self._publish()
 
     # ---- alerting -----------------------------------------------------
+
+    def _msg(self, key: str, **ctx) -> str:
+        """Render an alert's SMS text from the operator template (or the default)."""
+        template = self.templates.get(key) or tmpl.default_text(key)
+        return tmpl.render(template, ctx)
+
+    def set_templates(self, overrides: dict[str, str]) -> None:
+        """Replace the live SMS-template overrides (kept persisted by the caller)."""
+        self.templates = {k: v for k, v in overrides.items() if k in tmpl.SMS_TEMPLATES and v}
+
+    def status_summary(self) -> str:
+        """One SMS summarising every important status — used by the test message."""
+        dets = list(self._detectors.values())
+        online = sum(1 for d in dets if d.online)
+        in_alarm = sum(1 for d in dets if d.alarm)
+        low_batt = sum(1 for d in dets if d.battery is not None and d.battery <= 10)
+        # Local time for the operator (now() is UTC); .astimezone() -> system tz.
+        lines = [f"FireWatch TEST {now().astimezone():%Y-%m-%d %H:%M}"]
+        lines.append(f"Mode: {self.mode.value.upper()}")
+        lines.append(f"Detectors: {online}/{len(dets)} online, {in_alarm} in alarm, {low_batt} low battery")
+        u = self.ups
+        if u.monitored:
+            bits = [u.raw_status or ("online" if u.online else "unreachable")]
+            if u.grid_voltage is not None:
+                bits.append(f"grid {u.grid_voltage:.0f}V")
+            if u.load_pct is not None:
+                bits.append(f"load {u.load_pct}%")
+            if u.charge_pct is not None:
+                bits.append(f"batt {u.charge_pct}%")
+            if u.runtime_s is not None:
+                bits.append(f"~{round(u.runtime_s / 60)}min")
+            lines.append("UPS: " + ", ".join(bits))
+        else:
+            lines.append("UPS: not monitored")
+        lines.append(
+            f"Zigbee: {'online' if self.link.zigbee_online else 'OFFLINE'}, "
+            f"broker {'up' if self.link.mqtt_connected else 'DOWN'}"
+        )
+        if self.balance.credit is not None:
+            lines.append(f"SMS credit: {self.balance.credit:.0f}")
+        lines.append("This is a test — no action needed.")
+        return "\n".join(lines)
+
+    async def send_test_message(self) -> dict:
+        """Send the status summary to every recipient via the current policy.
+
+        Deliberately bypasses the alert/escalation machinery — it's a delivery
+        check, not an alarm, so no escalation timers are armed.
+        """
+        recips = sorted(self._cfg.recipients, key=lambda r: r.priority)
+        if not recips:
+            return {"ok": False, "error": "No receivers configured — add at least one phone number first."}
+        text = self.status_summary()
+        msisdns = [r.msisdn for r in recips]
+        results = await self._notifier.broadcast(msisdns, text, self.sms_policy)
+        sent = 0
+        for msisdn, send_results in results.items():
+            for sr in send_results:
+                if sr.ok:
+                    sent += 1
+                    await self._db.track_sms(sr.message_id, msisdn, text, sr.transport, "test")
+        await self._db.audit(
+            "sms",
+            {"text": text, "kind": "test",
+             "results": {m: [r.__dict__ for r in rs] for m, rs in results.items()}},
+            severity=Severity.INFO.value,
+            actor="test",
+        )
+        log.info("test message sent to %d recipient(s); %d transport-sends ok", len(msisdns), sent)
+        return {
+            "ok": any(sr.ok for rs in results.values() for sr in rs),
+            "recipients": len(msisdns),
+            "sent": sent,
+            "text": text,
+            "detail": {m: [{"transport": r.transport, "ok": r.ok, "detail": r.detail} for r in rs]
+                       for m, rs in results.items()},
+        }
+
+    async def _maybe_announce_failover(self, results: dict, msisdns: list[str]) -> None:
+        """One-shot notice the first time GatewayAPI fails and we fall to the modem.
+
+        Sent over the modem only (the primary path is down by definition) and
+        deduped via _primary_down so a sustained outage doesn't spam operators.
+        """
+        primary_failed = any(
+            any(r.transport == "gatewayapi" and not r.ok for r in rs)
+            for rs in results.values()
+        )
+        if not primary_failed:
+            self._primary_down = False
+            return
+        if self._primary_down:
+            return
+        self._primary_down = True
+        text = self._msg("sms_failover")
+        modem_results = await self._notifier.send_via_modem(msisdns, text)
+        await self._db.audit(
+            "sms",
+            {"text": text, "kind": "failover_notice",
+             "results": {m: [r.__dict__ for r in rs] for m, rs in modem_results.items()}},
+            severity=Severity.WARNING.value,
+            actor="notify",
+        )
 
     async def _raise(self, severity: Severity, text: str, actor: str) -> None:
         alert_key = self._next_alert_key()
@@ -290,6 +438,8 @@ class StateMachine:
 
         policy = self.sms_policy
         results = await self._notifier.broadcast(msisdns, text, policy)
+        if policy is SmsPolicy.FAILOVER:
+            await self._maybe_announce_failover(results, msisdns)
 
         for msisdn, send_results in results.items():
             for sr in send_results:

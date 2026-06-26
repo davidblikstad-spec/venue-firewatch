@@ -44,10 +44,12 @@ class Settings(BaseSettings):
     gatewayapi_timeout_s: float = 9.0
 
     # --- TRM240 modem (secondary SMS) ---
-    # Command template run to send via the modem. {to} and {text} are filled in.
-    # Default assumes gammu is installed and configured (~/.gammurc).
-    # Alternative (ModemManager): use an mmcli-based wrapper script here.
-    modem_send_cmd: str = "gammu sendsms TEXT {to} -text {text!r}"
+    # By default the built-in AT/PDU sender (app.modem_sms) talks to the modem's
+    # serial AT port directly — no gammu/ModemManager needed. Override only if
+    # you'd rather shell out: set modem_send_cmd to a command template where
+    # {to} and {text} are filled in, e.g. "gammu sendsms TEXT {to} -text {text!r}".
+    modem_port: str = "/dev/ttyUSB2"  # Quectel EC21 AT-command port on the TRM240
+    modem_send_cmd: str | None = None  # None -> use the built-in AT/PDU sender
     modem_enabled: bool = True
 
     # --- UPS (NUT) ---

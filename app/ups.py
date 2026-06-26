@@ -38,17 +38,61 @@ async def _read_ups(ups_name: str) -> UpsState | None:
             k, _, v = line.partition(":")
             fields[k.strip()] = v.strip()
 
+    def _int(key: str) -> int | None:
+        v = fields.get(key)
+        try:
+            return int(float(v)) if v is not None else None
+        except ValueError:
+            return None
+
+    def _float(key: str) -> float | None:
+        v = fields.get(key)
+        try:
+            return float(v) if v is not None else None
+        except ValueError:
+            return None
+
     status = fields.get("ups.status", "")
-    charge = fields.get("battery.charge")
     return UpsState(
         monitored=True,
         online=True,
         on_battery="OB" in status.split(),
         low_battery="LB" in status.split(),
-        charge_pct=int(charge) if charge and charge.isdigit() else None,
+        charge_pct=_int("battery.charge"),
+        grid_voltage=_float("input.voltage"),
+        load_pct=_int("ups.load"),
+        runtime_s=_int("battery.runtime"),
         raw_status=status or None,
         last_seen=now(),
     )
+
+
+async def scan_ups(host: str = "localhost") -> dict:
+    """List UPSes a NUT server is serving via `upsc -l <host>`.
+
+    Returns names already qualified as ``name@host`` so they drop straight into
+    the poller. ``installed`` is False when the `upsc` binary is missing (NUT not
+    installed yet); ``reachable`` is False when upsd isn't answering on `host`.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "upsc", "-l", host,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except FileNotFoundError:
+        return {"installed": False, "reachable": False, "ups": [], "error": "NUT (upsc) is not installed on this host."}
+    except (OSError, asyncio.TimeoutError) as exc:
+        return {"installed": True, "reachable": False, "ups": [], "error": f"scan failed: {exc}"}
+
+    if proc.returncode != 0:
+        return {"installed": True, "reachable": False, "ups": [],
+                "error": err.decode().strip()[:200] or f"upsc rc={proc.returncode}"}
+
+    names = [ln.strip() for ln in out.decode().splitlines() if ln.strip()]
+    return {"installed": True, "reachable": True,
+            "ups": [f"{n}@{host}" for n in names]}
 
 
 async def run_ups_poller(settings: Settings, machine: StateMachine) -> None:

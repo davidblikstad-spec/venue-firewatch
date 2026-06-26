@@ -49,6 +49,9 @@ class UpsState(BaseModel):
     on_battery: bool = False
     low_battery: bool = False
     charge_pct: int | None = None
+    grid_voltage: float | None = None   # input.voltage — mains/grid feeding the UPS
+    load_pct: int | None = None         # ups.load
+    runtime_s: int | None = None        # battery.runtime, seconds remaining on battery
     raw_status: str | None = None
     last_seen: datetime | None = None
 

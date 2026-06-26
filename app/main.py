@@ -23,13 +23,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
-from .config import Detector, get_settings, load_yaml_config
+from .config import Detector, Recipient, get_settings, load_yaml_config
 from .db import Database
 from .models import BalanceState, Mode, SmsPolicy, SystemSnapshot, UpsState, now
 from .mqtt_client import DeviceRegistry, MqttBridge
 from .notify import Notifier
 from .state import StateMachine
-from .ups import run_ups_poller
+from .ups import run_ups_poller, scan_ups
+from . import templates as sms_templates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("firewatch")
@@ -44,8 +45,10 @@ machine = StateMachine(settings, cfg, db, notifier)
 _PW_HASH_KEY = "auth.password_hash"
 _GATEWAYAPI_TOKEN_KEY = "secret.gatewayapi_token"
 _DETECTORS_KEY = "config.detectors"
+_RECIPIENTS_KEY = "config.recipients"
 _UPS_NAME_KEY = "config.ups_name"
 _UPS_POLL_KEY = "config.ups_poll_seconds"
+_TEMPLATE_PREFIX = "template."  # kv key per SMS template, e.g. template.alarm
 
 # Devices discovered from Z2M's bridge/devices topic; shared with the bridge so
 # the detector setup page can list what is actually paired.
@@ -191,6 +194,30 @@ async def _load_persisted_settings() -> None:
     elif cfg.detectors:
         await db.set(_DETECTORS_KEY, json.dumps([d.model_dump() for d in cfg.detectors]))
         log.info("seeded detector store from config.yaml (%d detectors)", len(cfg.detectors))
+
+    # Recipients: same model as detectors — DB store authoritative once it exists,
+    # seeded from config.yaml on first boot so the dashboard owns them thereafter.
+    raw_recipients = await db.get(_RECIPIENTS_KEY)
+    if raw_recipients:
+        try:
+            recips = [Recipient(**r) for r in json.loads(raw_recipients)]
+            machine.set_recipients(recips)
+            log.info("loaded %d recipient(s) from the settings store", len(recips))
+        except (ValueError, ValidationError):
+            log.exception("stored recipients are corrupt; keeping config.yaml set")
+    elif cfg.recipients:
+        await db.set(_RECIPIENTS_KEY, json.dumps([r.model_dump() for r in cfg.recipients]))
+        log.info("seeded recipient store from config.yaml (%d recipients)", len(cfg.recipients))
+
+    # SMS templates: load any operator overrides; unset keys use built-in defaults.
+    overrides: dict[str, str] = {}
+    for key in sms_templates.SMS_TEMPLATES:
+        val = await db.get(_TEMPLATE_PREFIX + key)
+        if val:
+            overrides[key] = val
+    machine.set_templates(overrides)
+    if overrides:
+        log.info("loaded %d custom SMS template(s)", len(overrides))
 
 
 @contextlib.asynccontextmanager
@@ -466,6 +493,7 @@ async def get_settings_status() -> JSONResponse:
             "status": (machine.ups.raw_status if machine.ups else None),
             "online": bool(machine.ups and machine.ups.online),
         },
+        "sms_policy": machine.sms_policy.value,
     })
 
 
@@ -498,6 +526,57 @@ async def set_gatewayapi_token(req: GatewayApiTokenRequest) -> JSONResponse:
     await db.audit("system", {"action": action}, severity="info", actor="settings")
     log.info("GatewayAPI token updated via settings (configured=%s)", bool(token))
     return JSONResponse({"ok": True, "configured": bool(token), "masked": _mask_token(token or None)})
+
+
+class TemplatesRequest(BaseModel):
+    templates: dict[str, str] = {}
+
+
+@app.get("/api/templates")
+async def get_templates() -> JSONResponse:
+    """All SMS scenarios with their metadata, current text, and built-in default."""
+    items = []
+    for key, spec in sms_templates.SMS_TEMPLATES.items():
+        override = machine.templates.get(key)
+        items.append({
+            "key": key,
+            "label": spec["label"],
+            "placeholders": spec["placeholders"],
+            "default": spec["default"],
+            "value": override or spec["default"],
+            "custom": bool(override),
+        })
+    return JSONResponse({"templates": items})
+
+
+@app.post("/api/settings/templates")
+async def set_templates(req: TemplatesRequest) -> JSONResponse:
+    """Save SMS-template overrides. Text equal to the default (or blank) clears
+    the override so the scenario falls back to the built-in wording."""
+    overrides: dict[str, str] = {}
+    for key, spec in sms_templates.SMS_TEMPLATES.items():
+        if key not in req.templates:
+            overrides[key] = machine.templates.get(key) or ""  # untouched: keep current
+            continue
+        text = req.templates[key].strip()
+        if text and text != spec["default"]:
+            await db.set(_TEMPLATE_PREFIX + key, text)
+            overrides[key] = text
+        else:
+            await db.set(_TEMPLATE_PREFIX + key, "")  # cleared -> use default
+    machine.set_templates({k: v for k, v in overrides.items() if v})
+    await db.audit("system", {"action": "sms_templates_updated",
+                              "custom": sorted(k for k, v in overrides.items() if v)},
+                   severity="info", actor="settings")
+    log.info("SMS templates updated (%d custom)", sum(1 for v in overrides.values() if v))
+    return JSONResponse({"ok": True, "custom": sorted(k for k, v in overrides.items() if v)})
+
+
+@app.get("/api/ups/scan")
+async def scan_ups_endpoint(host: str = "localhost") -> JSONResponse:
+    host = (host or "localhost").strip() or "localhost"
+    result = await scan_ups(host)
+    return JSONResponse({"ok": result.get("reachable", False), "host": host, **result})
 
 
 @app.post("/api/settings/ups")
@@ -655,6 +734,53 @@ async def put_detectors(detectors: list[Detector]) -> JSONResponse:
     return JSONResponse([d.model_dump() for d in detectors])
 
 
+@app.get("/api/recipients")
+async def get_recipients() -> JSONResponse:
+    return JSONResponse([r.model_dump() for r in cfg.recipients])
+
+
+@app.put("/api/recipients")
+async def put_recipients(recipients: list[Recipient]) -> JSONResponse:
+    """Replace the full recipient list. The dashboard saves the whole table."""
+    for r in recipients:
+        if not r.name.strip():
+            return JSONResponse({"error": "every recipient needs a name"}, status_code=400)
+        # Be lenient on input: strip spaces, dashes, parens and a leading '+'.
+        digits = "".join(ch for ch in r.msisdn if ch.isdigit())
+        if not (6 <= len(digits) <= 15):
+            return JSONResponse(
+                {"error": f"'{r.msisdn}' is not a valid number — use international format, e.g. 4799999999"},
+                status_code=400,
+            )
+        r.msisdn = digits
+    if len({r.msisdn for r in recipients}) != len(recipients):
+        return JSONResponse({"error": "duplicate phone number"}, status_code=400)
+
+    await db.set(_RECIPIENTS_KEY, json.dumps([r.model_dump() for r in recipients]))
+    machine.set_recipients(recipients)
+    await db.audit(
+        "system",
+        {"action": "recipients_updated", "count": len(recipients)},
+        severity="info",
+        actor="settings",
+    )
+    log.info("recipient list updated via dashboard (%d recipients)", len(recipients))
+    return JSONResponse([r.model_dump() for r in recipients])
+
+
+@app.get("/api/sms/test")
+async def preview_test_message() -> JSONResponse:
+    """The status summary that the test message would send, without sending it."""
+    return JSONResponse({"text": machine.status_summary(), "recipients": len(cfg.recipients)})
+
+
+@app.post("/api/sms/test")
+async def send_test_message() -> JSONResponse:
+    """Send the status-summary test SMS to all receivers via the current policy."""
+    result = await machine.send_test_message()
+    return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+
 @app.get("/api/devices")
 async def get_devices() -> JSONResponse:
     """Devices discovered from Z2M, annotated with whether each is already
@@ -681,22 +807,54 @@ async def settings_page():
 <title>FireWatch — Settings</title>
 <link rel="stylesheet" href="/style.css">
 <style>
-.wrap{max-width:520px;margin:6vh auto;padding:0 16px}
-.wrap h1{font-size:1.2rem;color:var(--live);margin:0 0 4px}
-.wrap a.back{font-size:.82rem;color:var(--muted,#9aa);text-decoration:none}
-.card{margin-top:20px;padding:22px;background:var(--panel);border:1px solid var(--hairline);border-radius:14px}
+.layout{max-width:900px;margin:5vh auto;padding:0 16px;display:flex;gap:24px;align-items:flex-start}
+.sidenav{position:sticky;top:5vh;flex:0 0 190px;display:flex;flex-direction:column;gap:4px}
+.sidenav h1{font-size:1.1rem;color:var(--live);margin:0 0 4px}
+.sidenav a.back{font-size:.8rem;color:var(--muted,#9aa);text-decoration:none;margin-bottom:14px;display:block}
+.sidenav button{text-align:left;background:transparent;border:1px solid transparent;color:var(--muted,#9aa);padding:9px 12px;border-radius:9px;cursor:pointer;font-size:.9rem;font-weight:500}
+.sidenav button:hover{color:var(--text)}
+.sidenav button.active{background:var(--panel);border-color:var(--hairline);color:var(--text);font-weight:600}
+.content{flex:1;min-width:0}
+.section{display:none} .section.active{display:block}
+.card{margin-top:0;margin-bottom:20px;padding:22px;background:var(--panel);border:1px solid var(--hairline);border-radius:14px}
 .card h2{font-size:1rem;margin:0 0 14px}
 .card label{display:block;font-size:.8rem;color:var(--muted,#9aa);margin:10px 0 4px}
-.card input{width:100%;padding:10px;background:var(--raised);border:1px solid var(--hairline);color:var(--text);border-radius:8px;font-family:var(--mono);font-size:.9rem;box-sizing:border-box}
+.card input,.card textarea{width:100%;padding:10px;background:var(--raised);border:1px solid var(--hairline);color:var(--text);border-radius:8px;font-family:var(--mono);font-size:.9rem;box-sizing:border-box}
+.card textarea{min-height:60px;resize:vertical;line-height:1.4}
 .card button{margin-top:14px;padding:10px 16px;background:color-mix(in srgb,var(--live) 22%,var(--raised));border:1px solid color-mix(in srgb,var(--live) 50%,transparent);color:var(--text);border-radius:8px;font-weight:600;cursor:pointer;font-size:.9rem}
+.card select{width:100%;padding:10px;background:var(--raised);border:1px solid var(--hairline);color:var(--text);border-radius:8px;font-family:var(--mono);font-size:.9rem;box-sizing:border-box}
+.row{display:flex;gap:10px;align-items:center;margin-top:10px}
+.row button{margin-top:0;white-space:nowrap}
+.row select{flex:1}
+.preview{white-space:pre-wrap;background:var(--raised);border:1px solid var(--hairline);border-radius:8px;padding:12px;font-family:var(--mono);font-size:.82rem;line-height:1.5;color:var(--text);margin:12px 0 0;overflow-wrap:anywhere}
+.ph{font-size:.74rem;color:var(--muted,#9aa);margin:4px 0 0;font-family:var(--mono)}
+.ph .reset{color:var(--live);cursor:pointer;text-decoration:underline;margin-left:8px}
+.tpl{margin-bottom:18px} .tpl:last-child{margin-bottom:0}
+.tpl h3{font-size:.9rem;margin:0 0 2px} .tpl .custom{color:var(--live);font-size:.72rem}
+.rec{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.rec input{width:auto;min-width:0;margin:0}
+.rec .nm{flex:2} .rec .num{flex:2} .rec .pri{flex:0 0 70px;text-align:center}
+.rec .del{flex:0 0 auto;margin:0;padding:8px 11px;background:transparent;border:1px solid var(--hairline);color:var(--alarm);border-radius:8px;cursor:pointer;font-weight:700}
+.rechead{display:flex;gap:8px;font-size:.72rem;color:var(--muted,#9aa);margin-bottom:6px}
+.rechead .nm{flex:2} .rechead .num{flex:2} .rechead .pri{flex:0 0 70px;text-align:center} .rechead .sp{flex:0 0 38px}
 .status{font-size:.82rem;color:var(--muted,#9aa);margin:0}
 .msg{font-size:.82rem;margin-top:10px;display:none}
 .msg.ok{color:var(--live)} .msg.err{color:var(--alarm)}
+@media(max-width:680px){.layout{flex-direction:column}.sidenav{position:static;flex-direction:row;flex-wrap:wrap}.sidenav h1,.sidenav a.back{flex-basis:100%}}
 </style></head><body>
-<div class="wrap">
-<a class="back" href="/">← back to dashboard</a>
+<div class="layout">
+<nav class="sidenav">
 <h1>Settings</h1>
+<a class="back" href="/">← back to dashboard</a>
+<button class="nav active" data-sec="security">Security</button>
+<button class="nav" data-sec="sms">SMS / GatewayAPI</button>
+<button class="nav" data-sec="receivers">Receivers</button>
+<button class="nav" data-sec="messages">Messages</button>
+<button class="nav" data-sec="ups">UPS</button>
+</nav>
+<div class="content">
 
+<section class="section active" id="sec-security">
 <div class="card">
 <h2>Dashboard password</h2>
 <label for="cur">Current password</label><input type="password" id="cur">
@@ -705,7 +863,9 @@ async def settings_page():
 <button id="pwBtn">Update password</button>
 <p class="msg" id="pwMsg"></p>
 </div>
+</section>
 
+<section class="section" id="sec-sms">
 <div class="card">
 <h2>GatewayAPI (SMS)</h2>
 <p class="status" id="gwStatus">Loading…</p>
@@ -713,26 +873,93 @@ async def settings_page():
 <button id="gwBtn">Save token</button>
 <p class="msg" id="gwMsg"></p>
 </div>
+<div class="card">
+<h2>Send policy</h2>
+<p class="status">How alerts are delivered across the two SMS transports.</p>
+<label for="policy">Policy</label>
+<select id="policy">
+<option value="failover">Failover — GatewayAPI first, TRM240 modem only if it fails</option>
+<option value="both">Both — send via GatewayAPI and the TRM240 modem at once</option>
+</select>
+<p class="ph" id="policyHelp"></p>
+<button id="policyBtn">Save policy</button>
+<p class="msg" id="policyMsg"></p>
+</div>
+<div class="card">
+<h2>Test message</h2>
+<p class="status">Sends a live status summary to every receiver via the current policy — a full end-to-end delivery check. Not an alarm.</p>
+<pre class="preview" id="testPreview">Loading preview…</pre>
+<div class="row"><button id="testRefresh" type="button">Refresh preview</button>
+<button id="testSend">Send test to all receivers</button></div>
+<p class="msg" id="testMsg"></p>
+</div>
+</section>
 
+<section class="section" id="sec-receivers">
+<div class="card">
+<h2>Alert receivers</h2>
+<p class="status">Phone numbers that receive SMS alerts. International digits only, no '+' (e.g. 4799999999). Priority: lower numbers are alerted first; same priority alerts together; higher tiers are escalated to if an alert goes unacknowledged.</p>
+<div id="recList" style="margin-top:14px"><p class="status">Loading…</p></div>
+<div class="row"><button id="recAddBtn" type="button">+ Add receiver</button></div>
+<button id="recBtn">Save receivers</button>
+<p class="msg" id="recMsg"></p>
+</div>
+</section>
+
+<section class="section" id="sec-ups">
 <div class="card">
 <h2>UPS (NUT)</h2>
 <p class="status" id="upsStatus">Loading…</p>
 <label for="upsName">UPS name</label><input type="text" id="upsName" placeholder="e.g. myups@localhost — blank to disable">
+<div class="row"><button id="upsScanBtn" type="button">Scan for UPSes</button>
+<select id="upsFound"><option value="">— scan to choose —</option></select></div>
+<p class="msg" id="upsScanMsg"></p>
 <label for="upsPoll">Poll interval (seconds)</label><input type="number" id="upsPoll" min="5" step="5">
 <button id="upsBtn">Save UPS</button>
 <p class="msg" id="upsMsg"></p>
 </div>
+</section>
+
+<section class="section" id="sec-messages">
+<div class="card">
+<h2>Alert SMS messages</h2>
+<p class="status">The text sent for each scenario. Use the listed {placeholders} — they are filled in when the alert fires. Blank or unchanged means the built-in default is used.</p>
+<div id="msgList" style="margin-top:14px"><p class="status">Loading…</p></div>
+<button id="msgBtn">Save messages</button>
+<p class="msg" id="msgMsg"></p>
+</div>
+</section>
+
+</div>
 </div>
 <script>
 function show(el,ok,text){el.textContent=text;el.className="msg "+(ok?"ok":"err");el.style.display="block"}
+document.querySelectorAll(".sidenav button.nav").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".sidenav button.nav").forEach(x=>x.classList.remove("active"));
+  document.querySelectorAll(".section").forEach(s=>s.classList.remove("active"));
+  b.classList.add("active");document.getElementById("sec-"+b.dataset.sec).classList.add("active");
+  location.hash=b.dataset.sec;});
+if(location.hash){const b=document.querySelector('.sidenav button[data-sec="'+location.hash.slice(1)+'"]');if(b)b.click();}
 async function refresh(){const r=await fetch("/api/settings");const d=await r.json();
   const g=d.gatewayapi;document.getElementById("gwStatus").textContent=
     g.configured?("Configured (token "+g.masked+"), sender “"+g.sender+"”"):("Not configured — SMS via GatewayAPI is disabled. Sender “"+g.sender+"”.");
   const u=d.ups;const us=document.getElementById("upsStatus");
   if(!u.name){us.textContent="Not configured — no UPS monitored."}
-  else{us.textContent="Monitoring “"+u.name+"” — "+(u.monitored?(u.online?("reachable"+(u.status?" ("+u.status+")"):"")):"not reachable yet")+", every "+u.poll_seconds+"s."}
+  else{us.textContent="Monitoring “"+u.name+"” — "+(u.monitored&&u.online?"reachable"+(u.status?" ("+u.status+")":""):"not reachable yet")+", every "+u.poll_seconds+"s."}
   if(document.activeElement!==document.getElementById("upsName"))document.getElementById("upsName").value=u.name||"";
-  if(document.activeElement!==document.getElementById("upsPoll"))document.getElementById("upsPoll").value=u.poll_seconds;}
+  if(document.activeElement!==document.getElementById("upsPoll"))document.getElementById("upsPoll").value=u.poll_seconds;
+  const ps=document.getElementById("policy");if(d.sms_policy&&document.activeElement!==ps){ps.value=d.sms_policy;}
+  setPolicyHelp();}
+function setPolicyHelp(){const h=document.getElementById("policyHelp");
+  h.textContent=document.getElementById("policy").value==="both"
+    ?"Maximum redundancy: recipients may receive two texts and it uses both GatewayAPI credit and the modem."
+    :"One text normally; the modem is used only if GatewayAPI errors or times out.";}
+document.getElementById("policy").onchange=setPolicyHelp;
+document.getElementById("policyBtn").onclick=async()=>{const m=document.getElementById("policyMsg");
+  const policy=document.getElementById("policy").value;
+  const r=await fetch("/api/sms/policy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({policy})});
+  if(r.ok){show(m,true,"Policy saved — "+policy+".");refresh();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
 document.getElementById("pwBtn").onclick=async()=>{const m=document.getElementById("pwMsg");
   const cur=document.getElementById("cur").value,np=document.getElementById("np").value,np2=document.getElementById("np2").value;
   if(np.length<8){show(m,false,"New password must be at least 8 characters");return}
@@ -755,6 +982,65 @@ document.getElementById("upsBtn").onclick=async()=>{const m=document.getElementB
   const r=await fetch("/api/settings/ups",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){show(m,true,name?"Saved — polling “"+name+"”.":"UPS monitoring disabled.");refresh();}
   else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+document.getElementById("upsScanBtn").onclick=async()=>{const m=document.getElementById("upsScanMsg");
+  const sel=document.getElementById("upsFound");show(m,true,"Scanning…");
+  const r=await fetch("/api/ups/scan");const d=await r.json().catch(()=>({}));
+  sel.innerHTML='<option value="">— scan to choose —</option>';
+  const list=d.ups||[];
+  if(list.length){for(const n of list){const o=document.createElement("option");o.value=n;o.textContent=n;sel.appendChild(o)}
+    show(m,true,"Found "+list.length+" UPS"+(list.length>1?"es":"")+" — pick one above.");}
+  else{show(m,false,d.error||"No UPSes found. Is NUT installed and serving one?")}};
+document.getElementById("upsFound").onchange=(e)=>{if(e.target.value)document.getElementById("upsName").value=e.target.value;};
+let TPL_DEFAULTS={};
+async function buildMessages(){const list=document.getElementById("msgList");
+  const r=await fetch("/api/templates");const d=await r.json().catch(()=>({templates:[]}));
+  list.innerHTML="";TPL_DEFAULTS={};
+  for(const t of d.templates){TPL_DEFAULTS[t.key]=t.default;
+    const wrap=document.createElement("div");wrap.className="tpl";
+    const phs=t.placeholders.length?t.placeholders.map(p=>"{"+p+"}").join(", "):"(no placeholders)";
+    const ta=document.createElement("textarea");ta.dataset.key=t.key;ta.value=t.value;
+    const h=document.createElement("h3");h.textContent=t.label;
+    if(t.custom){const c=document.createElement("span");c.className="custom";c.textContent=" • customised";h.appendChild(c);}
+    const ph=document.createElement("p");ph.className="ph";ph.textContent="Placeholders: "+phs;
+    const reset=document.createElement("span");reset.className="reset";reset.textContent="reset to default";
+    reset.onclick=()=>{ta.value=TPL_DEFAULTS[t.key];};ph.appendChild(reset);
+    wrap.appendChild(h);wrap.appendChild(ta);wrap.appendChild(ph);list.appendChild(wrap);}}
+document.getElementById("msgBtn").onclick=async()=>{const m=document.getElementById("msgMsg");
+  const templates={};document.querySelectorAll("#msgList textarea").forEach(ta=>{templates[ta.dataset.key]=ta.value;});
+  const r=await fetch("/api/settings/templates",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({templates})});
+  if(r.ok){show(m,true,"Messages saved.");buildMessages();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+function recRow(r){const row=document.createElement("div");row.className="rec";
+  const nm=document.createElement("input");nm.className="nm";nm.placeholder="Name";nm.value=r.name||"";
+  const num=document.createElement("input");num.className="num";num.placeholder="4799999999";num.value=r.msisdn||"";
+  const pri=document.createElement("input");pri.className="pri";pri.type="number";pri.min="0";pri.value=(r.priority!=null?r.priority:0);
+  const del=document.createElement("button");del.className="del";del.type="button";del.textContent="✕";del.title="Remove";del.onclick=()=>row.remove();
+  row.append(nm,num,pri,del);return row;}
+async function buildReceivers(){const list=document.getElementById("recList");
+  const r=await fetch("/api/recipients");const d=await r.json().catch(()=>[]);
+  list.innerHTML='<div class="rechead"><span class="nm">Name</span><span class="num">Phone (intl digits)</span><span class="pri">Priority</span><span class="sp"></span></div>';
+  (d||[]).forEach(x=>list.appendChild(recRow(x)));
+  if(!d||!d.length)list.appendChild(recRow({}));}
+document.getElementById("recAddBtn").onclick=()=>document.getElementById("recList").appendChild(recRow({}));
+document.getElementById("recBtn").onclick=async()=>{const m=document.getElementById("recMsg");
+  const rows=[...document.querySelectorAll("#recList .rec")].map(row=>{const i=row.querySelectorAll("input");
+    return {name:i[0].value.trim(),msisdn:i[1].value.trim(),priority:parseInt(i[2].value,10)||0};}).filter(x=>x.name||x.msisdn);
+  const r=await fetch("/api/recipients",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(rows)});
+  if(r.ok){show(m,true,"Saved "+rows.length+" receiver(s).");buildReceivers();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+async function loadTestPreview(){const p=document.getElementById("testPreview");
+  const r=await fetch("/api/sms/test");const d=await r.json().catch(()=>({}));
+  p.textContent=d.text||"(preview unavailable)";}
+document.getElementById("testRefresh").onclick=loadTestPreview;
+document.getElementById("testSend").onclick=async()=>{const m=document.getElementById("testMsg");
+  const btn=document.getElementById("testSend");btn.disabled=true;show(m,true,"Sending…");
+  const r=await fetch("/api/sms/test",{method:"POST"});const d=await r.json().catch(()=>({}));
+  btn.disabled=false;
+  if(r.ok){show(m,true,"Sent to "+d.recipients+" receiver(s) — "+d.sent+" transport send(s) ok.");}
+  else{show(m,false,d.error||"Failed to send test.")}};
+loadTestPreview();
+buildReceivers();
+buildMessages();
 refresh();
 </script></body></html>"""
 
