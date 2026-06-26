@@ -119,6 +119,18 @@ function metric(label, value, cls = "") {
   return `<span class="m ${cls}"><span class="ml">${label}</span>${esc(value)}</span>`;
 }
 
+// Z2M reports link quality as an LQI in 0–255, which means nothing to a
+// non-expert. Show it as a percentage + a 4-bar indicator, coloured by tier,
+// and keep the raw value in the tooltip.
+function signalCell(lqi) {
+  const pct = Math.round((lqi / 255) * 100);
+  const level = lqi <= 63 ? 1 : lqi <= 127 ? 2 : lqi <= 191 ? 3 : 4;
+  const cls = level === 1 ? "m-bad" : level === 2 ? "m-warn" : "";
+  const bars = "█".repeat(level) + "░".repeat(4 - level);
+  return `<span class="m ${cls}" title="Zigbee link quality ${esc(lqi)}/255">` +
+    `<span class="ml">signal</span><span class="sig-bars">${bars}</span> ${pct}%</span>`;
+}
+
 function detRow(d) {
   let status = "ok", badge = "OK";
   if (d.alarm) { status = "alarm"; badge = "ALARM"; }
@@ -134,7 +146,7 @@ function detRow(d) {
   const metrics = [
     d.temperature != null ? metric("temp", `${Number(d.temperature).toFixed(1)}°C`) : "",
     d.battery != null ? metric("batt", `${d.battery}%`, battCls) : "",
-    d.linkquality != null ? metric("signal", d.linkquality) : "",
+    d.linkquality != null ? signalCell(d.linkquality) : "",
     metric("seen", timeAgo(d.last_seen)),
   ].filter(Boolean).join("");
 
