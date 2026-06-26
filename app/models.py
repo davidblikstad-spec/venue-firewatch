@@ -35,6 +35,7 @@ class DetectorState(BaseModel):
     alarm: bool = False
     temperature: float | None = None
     battery: int | None = None
+    linkquality: int | None = None   # Z2M LQI (0–255); mesh signal strength
     fault: bool = False
     last_seen: datetime | None = None
     online: bool = True

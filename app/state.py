@@ -229,6 +229,8 @@ class StateMachine:
             det.temperature = payload["temperature"]
         if "battery" in payload:
             det.battery = payload["battery"]
+        if "linkquality" in payload:
+            det.linkquality = payload["linkquality"]
         if "tamper" in payload or "fault" in payload:
             det.fault = bool(payload.get("tamper") or payload.get("fault"))
 

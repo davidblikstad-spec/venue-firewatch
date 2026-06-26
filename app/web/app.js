@@ -103,20 +103,52 @@ function render() {
       : "GatewayAPI first; the modem takes over only if it fails.";
 }
 
+function timeAgo(iso) {
+  if (!iso) return "no data";
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function metric(label, value, cls = "") {
+  return `<span class="m ${cls}"><span class="ml">${label}</span>${esc(value)}</span>`;
+}
+
 function detRow(d) {
-  let status = "ok";
-  if (d.alarm) status = "alarm";
-  else if (!d.online) status = "offline";
-  else if (d.fault) status = "fault";
-  const tele = [
-    d.temperature != null ? `${d.temperature}°C` : null,
-    d.battery != null ? `${d.battery}%` : null,
-    !d.online ? "offline" : null,
-  ].filter(Boolean).join("  ·  ");
-  return `<li class="det" data-status="${status}">
+  let status = "ok", badge = "OK";
+  if (d.alarm) { status = "alarm"; badge = "ALARM"; }
+  else if (!d.online) { status = "offline"; badge = "OFFLINE"; }
+  else if (d.fault) { status = "fault"; badge = "FAULT"; }
+
+  const sub = [d.kind, d.zone].filter(Boolean).join("  ·  ");
+
+  const battCls = d.battery == null ? ""
+    : d.battery <= 10 ? "m-bad"
+    : d.battery <= 20 ? "m-warn" : "";
+
+  const metrics = [
+    d.temperature != null ? metric("temp", `${Number(d.temperature).toFixed(1)}°C`) : "",
+    d.battery != null ? metric("batt", `${d.battery}%`, battCls) : "",
+    d.linkquality != null ? metric("signal", d.linkquality) : "",
+    metric("seen", timeAgo(d.last_seen)),
+  ].filter(Boolean).join("");
+
+  const seenTitle = d.last_seen ? `Last message: ${new Date(d.last_seen).toLocaleString()}` : "No message received yet";
+  return `<li class="det" data-status="${status}" title="${esc(seenTitle)}">
     <span class="led"></span>
-    <span><span class="det-name">${esc(d.label)}</span> <span class="det-zone">${esc(d.zone)}</span></span>
-    <span class="det-tele">${esc(tele || "—")}</span>
+    <div class="det-main">
+      <div class="det-head">
+        <span class="det-name">${esc(d.label)}</span>
+        <span class="det-zone">${esc(sub)}</span>
+      </div>
+      <div class="det-metrics">${metrics}</div>
+    </div>
+    <span class="det-badge badge-${status}">${badge}</span>
   </li>`;
 }
 
