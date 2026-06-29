@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Venue FireWatch</title>
-  <link rel="stylesheet" href="/style.css?v=8" />
+  <link rel="stylesheet" href="/style.css?v=9" />
 </head>
 <body>
   <header class="topbar">
@@ -53,6 +53,13 @@
       <div class="ups" id="balance"><span class="empty">Not checked</span></div>
     </section>
 
+    <section class="card" id="watchdogCard">
+      <h2 class="card-title">Watchdog heartbeat <span class="conn hb-pill" id="hbState" data-state="down" title="Off-site watchdog: healthy when a beat succeeded recently">…</span></h2>
+      <div class="ups" id="watchdog"><span class="empty">Checking…</span></div>
+      <button id="hbTestBtn" class="ghost hb-test">Send test heartbeat</button>
+      <p class="hb-msg" id="hbMsg" hidden></p>
+    </section>
+
     <section class="card controls" id="controlsCard">
       <h2 class="card-title">Event mode</h2>
       <p class="hint">Silences alerts for haze zones while the fire watch is active. Always auto-reverts.</p>
@@ -87,6 +94,6 @@
   </main>
 
   <!-- Bump ?v= when app.js/style.css change so browsers fetch the new file. -->
-  <script src="/app.js?v=10"></script>
+  <script src="/app.js?v=11"></script>
 </body>
 </html>

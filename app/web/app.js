@@ -228,6 +228,44 @@ function renderBalance() {
     ${b.last_checked ? `<div><span class="k">checked </span>${new Date(b.last_checked).toLocaleTimeString()}</div>` : ""}`;
 }
 
+// ---- Watchdog heartbeat (polled separately; not part of the WS snapshot) ----
+function renderWatchdog(s) {
+  const el = $("watchdog");
+  const pill = $("hbState");
+  if (!s) { el.innerHTML = '<span class="empty">No data</span>'; return; }
+  if (!s.enabled) {
+    pill.dataset.state = "warn"; pill.textContent = "off";
+    el.innerHTML = '<span class="empty">Disabled (FW_HEARTBEAT_ENABLED=false)</span>';
+    return;
+  }
+  // Healthy = a successful beat within ~1.5x the interval and last code 200.
+  const okRecent = s.last_success_at &&
+    (Date.now() - new Date(s.last_success_at).getTime()) <= s.interval * 1500;
+  const healthy = !!okRecent && s.last_status_code === 200;
+  pill.dataset.state = healthy ? "up" : "down";
+  pill.textContent = healthy ? "ok" : "stale";
+
+  const codeLine = s.last_status_code != null
+    ? `${s.last_status_code}${s.last_response ? ` "${trunc(s.last_response, 24)}"` : ""}`
+    : (s.last_error ? trunc(s.last_error, 36) : "—");
+  const next = s.seconds_to_next_beat;
+  const atTitle = s.last_success_at ? new Date(s.last_success_at).toLocaleString() : "never succeeded";
+  el.innerHTML = `
+    <div title="${esc(atTitle)}"><span class="k">last beat </span><span class="${healthy ? "" : "ups-bad"}">${esc(timeAgo(s.last_success_at))}</span>${s.last_success_at ? ` (${esc(new Date(s.last_success_at).toLocaleTimeString())})` : ""}</div>
+    <div><span class="k">response </span><span class="${s.last_status_code === 200 ? "" : "ups-bad"}">${esc(codeLine)}</span></div>
+    <div><span class="k">target </span>${esc(s.url)}</div>
+    <div><span class="k">interval </span>${esc(s.interval)}s${next != null ? `  ·  next in ${esc(next)}s` : ""}</div>
+    ${s.consecutive_failures ? `<div class="ups-bad">${esc(s.consecutive_failures)} consecutive failure(s)</div>` : ""}`;
+}
+
+async function loadWatchdog() {
+  try {
+    const r = await fetch("/api/watchdog/status", { cache: "no-store" });
+    if (r.status === 401) { location.href = "/login"; return; }
+    renderWatchdog(await r.json());
+  } catch { /* keep the last render */ }
+}
+
 function renderCountdown() {
   const el = $("countdown");
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
@@ -317,6 +355,30 @@ document.querySelectorAll(".seg-btn").forEach((b) =>
     });
   })
 );
+
+$("hbTestBtn").addEventListener("click", async () => {
+  const btn = $("hbTestBtn"), msg = $("hbMsg");
+  btn.disabled = true;
+  msg.hidden = false; msg.className = "hb-msg"; msg.textContent = "Sending…";
+  try {
+    const r = await fetch("/api/watchdog/test", { method: "POST" });
+    const s = await r.json();
+    const ok = s.last_status_code === 200 && (s.last_response || "").trim() === "ok";
+    msg.className = "hb-msg " + (ok ? "ok" : "err");
+    msg.textContent = ok
+      ? `OK — 200 "${trunc(s.last_response, 24)}"`
+      : `Failed — ${s.last_status_code != null ? s.last_status_code + " " : ""}${trunc(s.last_error || s.last_response || "no response", 48)}`;
+    renderWatchdog(s);
+  } catch (e) {
+    msg.className = "hb-msg err"; msg.textContent = "Request failed: " + e;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Watchdog status polls on its own ~15s cadence, separate from the WS snapshot.
+loadWatchdog();
+setInterval(loadWatchdog, 15000);
 
 // (The 🐝 Zigbee2MQTT link href is set inline in index.html so it survives a
 // cached app.js.)

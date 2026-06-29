@@ -25,6 +25,7 @@ from pydantic import BaseModel, ValidationError
 
 from .config import Detector, Recipient, get_settings, load_yaml_config
 from .db import Database
+from .heartbeat import HeartbeatMonitor
 from .models import BalanceState, Mode, SmsPolicy, SystemSnapshot, UpsState, now
 from .mqtt_client import DeviceRegistry, MqttBridge
 from .notify import Notifier
@@ -41,10 +42,12 @@ cfg = load_yaml_config()
 db = Database(settings.db_path)
 notifier = Notifier(settings)
 machine = StateMachine(settings, cfg, db, notifier)
+heartbeat = HeartbeatMonitor(settings)
 
 # Settings persisted in the kv table and editable from the dashboard.
 _PW_HASH_KEY = "auth.password_hash"
 _GATEWAYAPI_TOKEN_KEY = "secret.gatewayapi_token"
+_HEARTBEAT_TOKEN_KEY = "secret.heartbeat_token"
 _VENUE_KEY = "config.venue_name"
 _DETECTORS_KEY = "config.detectors"
 _RECIPIENTS_KEY = "config.recipients"
@@ -166,6 +169,12 @@ async def _load_persisted_settings() -> None:
     if token:
         settings.gatewayapi_token = token
 
+    # Heartbeat token: same model — a value saved from the dashboard overrides
+    # FW_HEARTBEAT_TOKEN. The monitor reads settings.heartbeat_token live.
+    hb_token = await db.get(_HEARTBEAT_TOKEN_KEY)
+    if hb_token:
+        settings.heartbeat_token = hb_token
+
     # Venue name: kv store authoritative once set; seed it from config.yaml on
     # first boot so the dashboard owns it thereafter.
     venue = await db.get(_VENUE_KEY)
@@ -245,6 +254,7 @@ async def lifespan(_: FastAPI):
         asyncio.create_task(run_wan_poller(settings, machine), name="wan"),
         asyncio.create_task(_tick_loop(), name="tick"),
         asyncio.create_task(_balance_loop(), name="balance"),
+        asyncio.create_task(heartbeat.run(), name="heartbeat"),
     ]
     log.info("FireWatch started (%d detectors, %d recipients, auth=%s)",
              len(cfg.detectors), len(cfg.recipients),
@@ -321,6 +331,10 @@ class PasswordChangeRequest(BaseModel):
 
 class GatewayApiTokenRequest(BaseModel):
     token: str = ""  # empty clears the token (disables GatewayAPI)
+
+
+class HeartbeatTokenRequest(BaseModel):
+    token: str = ""  # empty clears the stored token (falls back to env, if any)
 
 
 class UpsSettingsRequest(BaseModel):
@@ -488,6 +502,20 @@ async def get_balance() -> JSONResponse:
     return JSONResponse(machine.balance.model_dump(mode="json") if machine.balance else {})
 
 
+# ---- Off-site watchdog heartbeat -----------------------------------------
+
+@app.get("/api/watchdog/status")
+async def watchdog_status() -> JSONResponse:
+    """Heartbeat emitter status. The token is never included."""
+    return JSONResponse(heartbeat.snapshot())
+
+
+@app.post("/api/watchdog/test")
+async def watchdog_test() -> JSONResponse:
+    """Send one heartbeat right now and return the live result."""
+    return JSONResponse(await heartbeat.beat_once())
+
+
 # ---- Settings (dashboard-managed config) ---------------------------------
 
 def _mask_token(token: str | None) -> str:
@@ -512,6 +540,13 @@ async def get_settings_status() -> JSONResponse:
             "monitored": bool(machine.ups and machine.ups.monitored),
             "status": (machine.ups.raw_status if machine.ups else None),
             "online": bool(machine.ups and machine.ups.online),
+        },
+        "heartbeat": {
+            "configured": bool(settings.heartbeat_token),
+            "masked": _mask_token(settings.heartbeat_token),
+            "enabled": settings.heartbeat_enabled,
+            "url": settings.heartbeat_url,
+            "interval": settings.heartbeat_interval,
         },
         "sms_policy": machine.sms_policy.value,
     })
@@ -545,6 +580,24 @@ async def set_gatewayapi_token(req: GatewayApiTokenRequest) -> JSONResponse:
         action = "gatewayapi_token_cleared"
     await db.audit("system", {"action": action}, severity="info", actor="settings")
     log.info("GatewayAPI token updated via settings (configured=%s)", bool(token))
+    return JSONResponse({"ok": True, "configured": bool(token), "masked": _mask_token(token or None)})
+
+
+@app.post("/api/settings/heartbeat")
+async def set_heartbeat_token(req: HeartbeatTokenRequest) -> JSONResponse:
+    """Set/clear the off-site watchdog token. Stored in the kv store (overrides
+    FW_HEARTBEAT_TOKEN); the heartbeat monitor picks it up on its next beat."""
+    token = req.token.strip()
+    if token:
+        await db.set(_HEARTBEAT_TOKEN_KEY, token)
+        settings.heartbeat_token = token
+        action = "heartbeat_token_set"
+    else:
+        await db.set(_HEARTBEAT_TOKEN_KEY, "")
+        settings.heartbeat_token = None
+        action = "heartbeat_token_cleared"
+    await db.audit("system", {"action": action}, severity="info", actor="settings")
+    log.info("heartbeat token updated via settings (configured=%s)", bool(token))
     return JSONResponse({"ok": True, "configured": bool(token), "masked": _mask_token(token or None)})
 
 
@@ -917,6 +970,7 @@ async def settings_page():
 <button class="nav" data-sec="receivers">Receivers</button>
 <button class="nav" data-sec="messages">Messages</button>
 <button class="nav" data-sec="ups">UPS</button>
+<button class="nav" data-sec="watchdog">Watchdog</button>
 </nav>
 <div class="content">
 
@@ -996,6 +1050,16 @@ async def settings_page():
 </div>
 </section>
 
+<section class="section" id="sec-watchdog">
+<div class="card">
+<h2>Off-site watchdog</h2>
+<p class="status" id="hbStatus">Loading…</p>
+<label for="hbtok">Heartbeat token</label><input type="password" id="hbtok" placeholder="paste the watchdog secret, or leave blank to clear">
+<button id="hbBtn">Save token</button>
+<p class="msg" id="hbStatusMsg"></p>
+</div>
+</section>
+
 <section class="section" id="sec-messages">
 <div class="card">
 <h2>Alert SMS messages</h2>
@@ -1026,6 +1090,9 @@ async function refresh(){const r=await fetch("/api/settings");const d=await r.js
   if(document.activeElement!==document.getElementById("upsName"))document.getElementById("upsName").value=u.name||"";
   if(document.activeElement!==document.getElementById("upsPoll"))document.getElementById("upsPoll").value=u.poll_seconds;
   const ps=document.getElementById("policy");if(d.sms_policy&&document.activeElement!==ps){ps.value=d.sms_policy;}
+  const hb=d.heartbeat;if(hb){document.getElementById("hbStatus").textContent=
+    (hb.enabled?("Enabled — beats to "+hb.url+" every "+hb.interval+"s. "):"Disabled (FW_HEARTBEAT_ENABLED=false). ")+
+    (hb.configured?("Token "+hb.masked+" set."):"No token set — the watchdog will reject beats with 403.");}
   setPolicyHelp();}
 function setPolicyHelp(){const h=document.getElementById("policyHelp");
   h.textContent=document.getElementById("policy").value==="both"
@@ -1056,6 +1123,12 @@ document.getElementById("gwBtn").onclick=async()=>{const m=document.getElementBy
   const r=await fetch("/api/settings/gatewayapi",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({token:tok})});
   if(r.ok){show(m,true,tok.trim()?"Token saved.":"Token cleared.");document.getElementById("tok").value="";refresh();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+document.getElementById("hbBtn").onclick=async()=>{const m=document.getElementById("hbStatusMsg");
+  const tok=document.getElementById("hbtok").value;
+  const r=await fetch("/api/settings/heartbeat",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({token:tok})});
+  if(r.ok){show(m,true,tok.trim()?"Token saved — applies on the next beat.":"Token cleared.");document.getElementById("hbtok").value="";refresh();}
   else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
 document.getElementById("upsBtn").onclick=async()=>{const m=document.getElementById("upsMsg");
   const name=document.getElementById("upsName").value.trim();

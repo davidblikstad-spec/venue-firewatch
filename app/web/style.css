@@ -166,6 +166,13 @@ html[data-mode="alarm"] .banner-mode { animation: pulse 1.1s ease-in-out infinit
 .wan-row:has(.wan-active) .led { background: var(--live); box-shadow: 0 0 8px var(--live); }
 .wan-row:has(.wan-down) .led { background: var(--alarm); }
 
+/* --- Watchdog heartbeat --- */
+.hb-pill { float: right; }
+.hb-test { margin-top: 14px; }
+.hb-msg { margin: 12px 0 0; font-family: var(--mono); font-size: .8rem; color: var(--muted); }
+.hb-msg.ok { color: var(--live); }
+.hb-msg.err { color: var(--alarm); }
+
 /* --- Controls --- */
 .hint { color: var(--muted); font-size: .82rem; margin: 0 0 14px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }

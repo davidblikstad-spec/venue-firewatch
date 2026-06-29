@@ -84,6 +84,18 @@ class Settings(BaseSettings):
     # --- Escalation ---
     escalation_timeout_minutes: int = 5  # re-alert after this many minutes with no ack
 
+    # --- Off-site watchdog heartbeat ---
+    # An external watchdog (Node-RED at davidblikstad.no) SMS-alerts if these
+    # beats stop. Emitting them from inside firewatch — not a cron — proves the
+    # app itself is running, not merely that the box has power. The token must
+    # match the watchdog's secret; never hardcode/commit it. It is normally set
+    # from the dashboard Settings page (stored in the db) — a value saved there
+    # overrides this env var. Set FW_HEARTBEAT_TOKEN only to seed it from env.
+    heartbeat_enabled: bool = True
+    heartbeat_url: str = "https://davidblikstad.no/heartbeat"
+    heartbeat_token: str | None = None
+    heartbeat_interval: int = 300  # seconds between beats
+
 
 class Recipient(BaseModel):
     name: str
