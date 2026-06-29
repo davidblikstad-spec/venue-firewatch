@@ -31,6 +31,10 @@ log = logging.getLogger("firewatch.mqtt")
 ALARM_PROPERTIES = ("smoke", "heat", "gas", "carbon_monoxide", "co", "water_leak")
 # Other binary exposes worth surfacing but not treated as the primary alarm.
 _SUPERVISORY_PROPERTIES = ("tamper", "battery_low")
+# Settable exposes that sound a buzzer (interconnect). Develco SMSZB-120 uses
+# "alarm"; many IAS-WD sirens use "warning".
+SIREN_PROPERTIES = ("warning", "alarm", "siren", "squawk")
+_ACCESS_SET = 0b010  # Z2M access bitmask: bit 1 = settable (publishable to /set)
 
 
 def _walk_exposes(exposes: list) -> list[dict]:
@@ -44,6 +48,17 @@ def _walk_exposes(exposes: list) -> list[dict]:
         elif ex.get("property"):
             leaves.append(ex)
     return leaves
+
+
+def _all_nodes(exposes: list):
+    """Yield every expose node (containers included), not just leaves — so a
+    settable composite like `warning` is seen even though it has sub-features."""
+    for ex in exposes or []:
+        if not isinstance(ex, dict):
+            continue
+        yield ex
+        if isinstance(ex.get("features"), list):
+            yield from _all_nodes(ex["features"])
 
 
 def _summarize_device(entry: dict) -> dict | None:
@@ -64,6 +79,13 @@ def _summarize_device(entry: dict) -> dict | None:
     suggested = alarm_props[0] if alarm_props else None
     kind = "smoke" if "smoke" in binary_props else "heat" if "heat" in binary_props else "other"
 
+    # Settable buzzer controls, in SIREN_PROPERTIES preference order, deduped.
+    settable = {
+        n["property"] for n in _all_nodes(definition.get("exposes") or [])
+        if n.get("property") and isinstance(n.get("access"), int) and (n["access"] & _ACCESS_SET)
+    }
+    siren_props = [p for p in SIREN_PROPERTIES if p in settable]
+
     return {
         "friendly_name": friendly,
         "vendor": definition.get("vendor"),
@@ -71,7 +93,9 @@ def _summarize_device(entry: dict) -> dict | None:
         "description": definition.get("description"),
         "binary_properties": binary_props,
         "alarm_properties": alarm_props,
+        "siren_properties": siren_props,
         "suggested_alarm_property": suggested,
+        "suggested_siren_property": siren_props[0] if siren_props else None,
         "suggested_kind": kind,
         "is_alarm_device": bool(alarm_props),
     }

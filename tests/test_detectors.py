@@ -37,6 +37,32 @@ def test_summarize_smoke_detector():
     assert "battery_low" in s["binary_properties"]  # nested feature was flattened
 
 
+def test_summarize_detects_settable_siren():
+    # `alarm` is settable (access bit 2) -> a siren; `smoke` is the trip prop;
+    # a read-only `warning` (access 1) must NOT be offered as a siren.
+    s = _summarize_device({
+        "friendly_name": "smoke_x", "type": "EndDevice",
+        "definition": {"vendor": "Develco", "model": "SMSZB-120", "exposes": [
+            {"type": "binary", "name": "smoke", "property": "smoke", "access": 1},
+            {"type": "binary", "name": "alarm", "property": "alarm", "access": 2},
+            {"type": "binary", "name": "warning", "property": "warning", "access": 1},
+            {"type": "numeric", "name": "max_duration", "property": "max_duration", "access": 7},
+        ]},
+    })
+    assert s["siren_properties"] == ["alarm"]
+    assert s["suggested_siren_property"] == "alarm"
+    assert s["alarm_properties"] == ["smoke"]  # siren prop never pollutes alarm list
+
+
+def test_summarize_no_siren_when_none_settable():
+    s = _summarize_device({
+        "friendly_name": "smoke_lobby", "type": "EndDevice",
+        "definition": {"vendor": "Frient", "model": "SMSZB-120", "exposes": _SMOKE_EXPOSES},
+    })
+    assert s["siren_properties"] == []
+    assert s["suggested_siren_property"] is None
+
+
 def test_summarize_skips_coordinator():
     assert _summarize_device({"type": "Coordinator", "friendly_name": "Coordinator"}) is None
 

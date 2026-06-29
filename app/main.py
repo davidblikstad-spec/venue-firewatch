@@ -691,18 +691,42 @@ button{cursor:pointer;font-family:inherit}
 <p class="msg" id="msg"></p>
 </div>
 </div>
+<datalist id="devNames"></datalist>
 <script>
 const KINDS=["smoke","heat","gas","other"];
+// Used for the Alarm-prop dropdown when a row's device isn't discovered yet.
+const ALARM_FALLBACK=["smoke","heat","gas","carbon_monoxide","co","water_leak"];
 const rows=document.getElementById("rows");
+let devMap={};  // friendly_name -> discovered device summary (exposes etc.)
 function cell(cls,inner){const td=document.createElement("td");if(cls)td.className=cls;td.appendChild(inner);return td}
 function inp(val,ph){const i=document.createElement("input");i.value=val??"";if(ph)i.placeholder=ph;return i}
+// Build a <select> from [{v,t}] options. Always keeps `value` selectable even
+// if the device doesn't list it (shown as "… (saved)"), so a save never drops
+// a manually-set property.
+function sel(opts,value){const s=document.createElement("select");const seen=new Set();
+  for(const o of opts){if(seen.has(o.v))continue;seen.add(o.v);
+    const el=document.createElement("option");el.value=o.v;el.textContent=o.t;
+    if(o.v===(value??""))el.selected=true;s.appendChild(el)}
+  if(value&&!seen.has(value)){const el=document.createElement("option");
+    el.value=value;el.textContent=value+" (saved)";el.selected=true;s.appendChild(el)}
+  return s}
+function alarmOpts(fn){const dev=devMap[fn];
+  const props=(dev&&dev.alarm_properties&&dev.alarm_properties.length)?dev.alarm_properties:ALARM_FALLBACK;
+  return props.map(p=>({v:p,t:p}))}
+function sirenOpts(fn){const dev=devMap[fn];const props=(dev&&dev.siren_properties)||[];
+  return [{v:"",t:"\\u2014 no siren \\u2014"}].concat(props.map(p=>({v:p,t:p})))}
 function addRow(d){d=d||{};const tr=document.createElement("tr");
-  const label=inp(d.label,"Stage left"),fn=inp(d.friendly_name,"heat_stage_left");
+  const label=inp(d.label,"Stage left"),fn=inp(d.friendly_name,"heat_stage_left");fn.setAttribute("list","devNames");
   const kind=document.createElement("select");for(const k of KINDS){const o=document.createElement("option");o.value=o.textContent=k;if((d.kind||"heat")===k)o.selected=true;kind.appendChild(o)}
-  const prop=inp(d.alarm_property||"heat"),siren=inp(d.siren_property||"","alarm"),zone=inp(d.zone||"default");
+  let prop=sel(alarmOpts(fn.value),d.alarm_property||""),siren=sel(sirenOpts(fn.value),d.siren_property||"");
+  const propCell=cell("",prop),sirenCell=cell("",siren);
+  fn.addEventListener("input",()=>{  // device changed -> repopulate options, keep current pick
+    const np=sel(alarmOpts(fn.value),prop.value);propCell.replaceChild(np,prop);prop=np;
+    const ns=sel(sirenOpts(fn.value),siren.value);sirenCell.replaceChild(ns,siren);siren=ns});
+  const zone=inp(d.zone||"default");
   const off=inp(d.offline_after_hours??6);off.type="number";off.step="0.5";off.min="0";
-  tr.append(cell("",label),cell("",fn),cell("",kind),cell("",prop),cell("",siren),cell("",zone),cell("num",off));
-  const del=document.createElement("button");del.className="iconbtn";del.textContent="✕";del.title="Remove";del.onclick=()=>tr.remove();
+  tr.append(cell("",label),cell("",fn),cell("",kind),propCell,sirenCell,cell("",zone),cell("num",off));
+  const del=document.createElement("button");del.className="iconbtn";del.textContent="\\u2715";del.title="Remove";del.onclick=()=>tr.remove();
   tr.append(cell("",del));
   tr._get=()=>({label:label.value.trim(),friendly_name:fn.value.trim(),kind:kind.value,
     alarm_property:prop.value.trim(),siren_property:siren.value.trim()||null,
@@ -721,6 +745,9 @@ async function loadDetectors(){const r=await fetch("/api/detectors");const d=awa
 function configuredNames(){return new Set([...rows.children].map(tr=>tr._get().friendly_name))}
 async function loadDevices(){const el=document.getElementById("disc");
   const r=await fetch("/api/devices");const d=await r.json();
+  devMap={};for(const dev of d.devices)devMap[dev.friendly_name]=dev;
+  document.getElementById("devNames").innerHTML="";
+  for(const dev of d.devices){const o=document.createElement("option");o.value=dev.friendly_name;document.getElementById("devNames").appendChild(o)}
   if(!d.devices.length){el.innerHTML='<span class="empty">No devices reported yet — Z2M must be running and publishing bridge/devices.</span>';return}
   const have=configuredNames();el.innerHTML="";
   for(const dev of d.devices){const box=document.createElement("div");box.className="dev";
@@ -730,14 +757,17 @@ async function loadDevices(){const el=document.getElementById("disc");
     meta.textContent=[dev.vendor,dev.model].filter(Boolean).join(" ")||"unknown";
     left.append(nm,meta);
     if(dev.is_alarm_device){const t=document.createElement("div");t.className="tag";t.textContent=dev.alarm_properties.join(" / ");left.append(t)}
+    if(dev.siren_properties&&dev.siren_properties.length){const t=document.createElement("div");t.className="tag";t.textContent="\\ud83d\\udd14 "+dev.siren_properties.join(" / ");left.append(t)}
     box.append(left);
     const btn=document.createElement("button");
     if(have.has(dev.friendly_name)||dev.configured){btn.textContent="added";btn.disabled=true}
     else{btn.textContent="Add";btn.onclick=()=>{addRow({friendly_name:dev.friendly_name,
       label:dev.description||dev.friendly_name,kind:dev.suggested_kind||"heat",
-      alarm_property:dev.suggested_alarm_property||"heat"});btn.textContent="added";btn.disabled=true}}
+      alarm_property:dev.suggested_alarm_property||"",siren_property:dev.suggested_siren_property||""});btn.textContent="added";btn.disabled=true}}
     box.append(btn);el.append(box)}}
-loadDetectors().then(loadDevices);
+// Devices first so detector rows build their dropdowns from live exposes; then
+// a second pass marks already-configured devices as "added".
+loadDevices().then(loadDetectors).then(loadDevices);
 </script></body></html>"""
 
 
