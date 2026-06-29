@@ -53,11 +53,10 @@ function renderLink() {
 }
 
 // ---- Render ----
-function anyAlarm(d) { return d.detectors.some((x) => x.alarm); }
-
 function render() {
   if (!state) return;
-  const mode = anyAlarm(state) ? "alarm" : state.mode;
+  const fires = state.detectors.filter((x) => x.alarm);
+  const mode = fires.length ? "alarm" : state.mode;
   html.dataset.mode = mode;
 
   // Venue name in the header (and page title); falls back to the default sub.
@@ -65,10 +64,12 @@ function render() {
   $("brandSub").textContent = venue || "secondary monitor";
   document.title = venue ? `${venue} — FireWatch` : "Venue FireWatch";
 
-  // Banner
-  $("bannerMode").textContent = anyAlarm(state) ? "ALARM" : state.mode.toUpperCase();
-  if (anyAlarm(state)) {
-    $("bannerLine").textContent = "Active detection — check the floor";
+  // Banner. On a trip the headline reads FIRE and the sub-line names where.
+  $("bannerMode").textContent = fires.length ? "FIRE" : state.mode.toUpperCase();
+  if (fires.length) {
+    const f = fires[0];
+    const where = f.zone ? `${f.label} — ${f.zone} zone` : f.label;
+    $("bannerLine").textContent = fires.length > 1 ? `${where} (+${fires.length - 1} more)` : where;
   } else if (state.mode === "event") {
     $("bannerLine").textContent = "Alerts silenced for haze zones — fire watch is the detection";
   } else {
