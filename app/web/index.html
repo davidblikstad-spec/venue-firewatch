@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Venue FireWatch</title>
-  <link rel="stylesheet" href="/style.css?v=11" />
+  <link rel="stylesheet" href="/style.css?v=12" />
 </head>
 <body>
   <header class="topbar">
@@ -14,6 +14,7 @@
       <span class="brand-sub" id="brandSub">secondary monitor</span>
     </div>
     <div class="topbar-right">
+      <span class="uptime" id="uptime" title="FireWatch uptime — time since the service last restarted"></span>
       <a class="settings-link" id="z2mLink" href="#" target="_blank" rel="noopener" title="Open the Zigbee2MQTT frontend" aria-label="Zigbee2MQTT">🐝</a>
       <a class="settings-link" href="/detectors" title="Detectors" aria-label="Detectors">🔥</a>
       <a class="settings-link" href="/settings" title="Settings" aria-label="Settings">⚙</a>
@@ -94,6 +95,6 @@
   </main>
 
   <!-- Bump ?v= when app.js/style.css change so browsers fetch the new file. -->
-  <script src="/app.js?v=11"></script>
+  <script src="/app.js?v=12"></script>
 </body>
 </html>

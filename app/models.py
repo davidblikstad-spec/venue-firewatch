@@ -107,4 +107,5 @@ class SystemSnapshot(BaseModel):
     balance: BalanceState | None = None
     link: LinkState = Field(default_factory=LinkState)
     wan: WanState | None = None
+    started_at: datetime | None = None   # when the firewatch process came up
     updated_at: datetime = Field(default_factory=now)

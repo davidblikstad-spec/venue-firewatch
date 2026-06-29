@@ -55,6 +55,7 @@ class StateMachine:
         self._notifier = notifier
 
         self.venue: str = (cfg.venue_name or "").strip()
+        self.started_at: datetime | None = None  # set by main at lifespan startup
         self.mode: Mode = Mode.NORMAL
         self.sms_policy: SmsPolicy = SmsPolicy.FAILOVER
         self.event_until: datetime | None = None
@@ -155,6 +156,7 @@ class StateMachine:
             balance=self.balance,
             link=self.link,
             wan=self.wan,
+            started_at=self.started_at,
         )
 
     async def _publish(self) -> None:

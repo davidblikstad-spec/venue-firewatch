@@ -58,6 +58,11 @@ body {
   opacity: .8; transition: opacity .2s, color .2s;
 }
 .settings-link:hover { opacity: 1; color: var(--text); }
+.uptime {
+  font-family: var(--mono); font-size: .72rem; color: var(--muted);
+  letter-spacing: .04em; white-space: nowrap;
+}
+.uptime:empty { display: none; }
 .conn {
   font-family: var(--mono); font-size: .72rem; text-transform: uppercase;
   letter-spacing: .12em; padding: 4px 10px; border-radius: 999px;

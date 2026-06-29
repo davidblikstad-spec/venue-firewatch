@@ -97,6 +97,9 @@ function render() {
   // Balance
   renderBalance();
 
+  // Uptime (immediate; a 1s interval keeps it ticking between snapshots)
+  tickUptime();
+
   // Controls
   $("armBtn").hidden = state.mode === "event";
   $("endBtn").hidden = state.mode !== "event";
@@ -123,6 +126,24 @@ function timeAgo(iso) {
 
 function metric(label, value, cls = "") {
   return `<span class="m ${cls}"><span class="ml">${label}</span>${esc(value)}</span>`;
+}
+
+// FireWatch process uptime, ticking once a second off the snapshot's start time.
+function fmtUptime(ms) {
+  let s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60); s -= m * 60;
+  const p = (n) => String(n).padStart(2, "0");
+  if (d > 0) return `up ${d}d ${p(h)}h ${p(m)}m`;
+  if (h > 0) return `up ${h}h ${p(m)}m`;
+  return `up ${m}m ${p(s)}s`;
+}
+
+function tickUptime() {
+  const el = $("uptime");
+  if (!state || !state.started_at) { el.textContent = ""; return; }
+  el.textContent = fmtUptime(Date.now() - new Date(state.started_at).getTime());
 }
 
 // Z2M reports link quality as an LQI in 0–255, which means nothing to a
@@ -379,6 +400,9 @@ $("hbTestBtn").addEventListener("click", async () => {
 // Watchdog status polls on its own ~15s cadence, separate from the WS snapshot.
 loadWatchdog();
 setInterval(loadWatchdog, 15000);
+
+// Uptime ticks every second off the last snapshot's started_at.
+setInterval(tickUptime, 1000);
 
 // (The 🐝 Zigbee2MQTT link href is set inline in index.html so it survives a
 // cached app.js.)

@@ -244,6 +244,7 @@ async def lifespan(_: FastAPI):
     await db.init()
     await _load_persisted_settings()
     await machine.restore()
+    machine.started_at = now()  # process start, for the dashboard uptime counter
     machine.add_listener(clients.push)
 
     bridge = MqttBridge(settings, cfg, machine, registry)
