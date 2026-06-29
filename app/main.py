@@ -238,6 +238,7 @@ async def lifespan(_: FastAPI):
     machine.add_listener(clients.push)
 
     bridge = MqttBridge(settings, cfg, machine, registry)
+    machine.set_siren(bridge.publish_set)
     tasks = [
         asyncio.create_task(bridge.run(), name="mqtt"),
         asyncio.create_task(run_ups_poller(settings, machine), name="ups"),
@@ -438,6 +439,13 @@ async def end_event(actor: str = "dashboard") -> JSONResponse:
 async def set_policy(req: PolicyRequest) -> JSONResponse:
     await machine.set_policy(req.policy, actor=req.actor)
     return JSONResponse({"sms_policy": req.policy.value})
+
+
+@app.post("/api/siren/silence")
+async def silence_siren(actor: str = "dashboard") -> JSONResponse:
+    """Operator 'all clear' — silence remote sirens before they time out."""
+    await machine.silence_interconnect(actor=actor)
+    return JSONResponse({"ok": True})
 
 
 # ---- DLR webhook (GatewayAPI posts delivery receipts here) ---------------
@@ -676,7 +684,7 @@ button{cursor:pointer;font-family:inherit}
 <h2>Monitored detectors</h2>
 <p class="hint">Each <code>friendly_name</code> must match Zigbee2MQTT exactly. <code>alarm_property</code> is the boolean field that goes true on detection (e.g. “smoke”, “heat”). EVENT mode silences only the zones you list as silent.</p>
 <table><thead><tr>
-<th>Label</th><th>Friendly name</th><th>Kind</th><th>Alarm prop</th><th>Zone</th><th title="Hours without a check-in before it is treated as a fault">Offline h</th><th></th>
+<th>Label</th><th>Friendly name</th><th>Kind</th><th>Alarm prop</th><th title="Settable property that sounds this device's buzzer for interconnect (e.g. &quot;alarm&quot;). Leave blank if it has no remote siren.">Siren prop</th><th>Zone</th><th title="Hours without a check-in before it is treated as a fault">Offline h</th><th></th>
 </tr></thead><tbody id="rows"></tbody></table>
 <button class="addbtn" id="addBtn">+ Add detector</button>
 <div><button class="savebtn" id="saveBtn">Save detectors</button></div>
@@ -691,13 +699,14 @@ function inp(val,ph){const i=document.createElement("input");i.value=val??"";if(
 function addRow(d){d=d||{};const tr=document.createElement("tr");
   const label=inp(d.label,"Stage left"),fn=inp(d.friendly_name,"heat_stage_left");
   const kind=document.createElement("select");for(const k of KINDS){const o=document.createElement("option");o.value=o.textContent=k;if((d.kind||"heat")===k)o.selected=true;kind.appendChild(o)}
-  const prop=inp(d.alarm_property||"heat"),zone=inp(d.zone||"default");
+  const prop=inp(d.alarm_property||"heat"),siren=inp(d.siren_property||"","alarm"),zone=inp(d.zone||"default");
   const off=inp(d.offline_after_hours??6);off.type="number";off.step="0.5";off.min="0";
-  tr.append(cell("",label),cell("",fn),cell("",kind),cell("",prop),cell("",zone),cell("num",off));
+  tr.append(cell("",label),cell("",fn),cell("",kind),cell("",prop),cell("",siren),cell("",zone),cell("num",off));
   const del=document.createElement("button");del.className="iconbtn";del.textContent="✕";del.title="Remove";del.onclick=()=>tr.remove();
   tr.append(cell("",del));
   tr._get=()=>({label:label.value.trim(),friendly_name:fn.value.trim(),kind:kind.value,
-    alarm_property:prop.value.trim(),zone:zone.value.trim()||"default",
+    alarm_property:prop.value.trim(),siren_property:siren.value.trim()||null,
+    zone:zone.value.trim()||"default",
     offline_after_hours:parseFloat(off.value)||6});
   rows.appendChild(tr);return tr}
 function show(ok,text){const m=document.getElementById("msg");m.textContent=text;m.className="msg "+(ok?"ok":"err");m.style.display="block"}
@@ -960,7 +969,7 @@ async def settings_page():
 <section class="section" id="sec-messages">
 <div class="card">
 <h2>Alert SMS messages</h2>
-<p class="status">The text sent for each scenario. Use the listed {placeholders} — they are filled in when the alert fires. Blank or unchanged means the built-in default is used.</p>
+<p class="status">The text sent for each scenario. Use the listed {placeholders} — they are filled in when the alert fires. Blank or unchanged means the built-in default is used. Every message is automatically prefixed with the venue name (Venue tab) — don't repeat it here.</p>
 <div id="msgList" style="margin-top:14px"><p class="status">Loading…</p></div>
 <button id="msgBtn">Save messages</button>
 <p class="msg" id="msgMsg"></p>

@@ -21,11 +21,21 @@ recipients:
 silent_zones_in_event:
   - stage
 
+# Interconnect: when a detector trips (and is not silenced by EVENT mode),
+# sound every siren-capable detector — see `siren_property` per detector below.
+# Each remote siren self-stops after siren_max_duration_s, so a dropped broker
+# or missed "all clear" can never latch the buzzers on indefinitely. The
+# dashboard has a "Silence all sirens" button to drop them early.
+siren_interconnect: false
+siren_max_duration_s: 300
+
 # Each detector must match a Zigbee2MQTT friendly_name exactly.
 # IMPORTANT: confirm `alarm_property` against the values your device actually
 # exposes in the Z2M frontend. For the frient HESZB-120 heat alarm it is
 # typically "heat"; a smoke alarm exposes "smoke". When unsure, watch the
 # device's JSON in Z2M and use the boolean field that flips on detection.
+# `siren_property` is the SETTABLE field that sounds the buzzer (Develco
+# SMSZB-120 exposes "alarm"); omit it for devices with no remote siren.
 detectors:
   - friendly_name: heat_stage_left
     label: Stage left
@@ -38,6 +48,7 @@ detectors:
     label: Lobby
     kind: smoke
     alarm_property: smoke
+    siren_property: alarm
     zone: front_of_house
     offline_after_hours: 6
 
@@ -45,5 +56,6 @@ detectors:
     label: Rack room
     kind: smoke
     alarm_property: smoke
+    siren_property: alarm
     zone: technical
     offline_after_hours: 6

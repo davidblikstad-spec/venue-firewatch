@@ -69,6 +69,10 @@ class StateMachine:
         self.templates: dict[str, str] = {}
         self._primary_down = False  # True once GatewayAPI has failed and we're on the modem
         self._restore_pending = False  # mains came back; awaiting a real voltage to announce
+        # Publisher to a detector's /set topic (wired to the MQTT bridge in
+        # main). None until wired; commands are no-ops without it.
+        self._siren: Callable[[str, dict], Awaitable[bool]] | None = None
+        self._interconnect_active = False  # True once we've sounded remote sirens
 
         self._detectors: dict[str, DetectorState] = {
             d.friendly_name: DetectorState(
@@ -85,6 +89,10 @@ class StateMachine:
 
     def add_listener(self, fn: Listener) -> None:
         self._listeners.append(fn)
+
+    def set_siren(self, fn: Callable[[str, dict], Awaitable[bool]]) -> None:
+        """Wire the publisher used to sound/silence remote sirens."""
+        self._siren = fn
 
     async def set_detectors(self, detectors: list[Detector]) -> None:
         """Replace the monitored-detector set at runtime (dashboard-driven).
@@ -264,6 +272,39 @@ class StateMachine:
             self._msg("alarm", label=det.label, kind=det.kind, zone=det.zone, temperature=det.temperature),
             actor="detector",
         )
+        await self._sound_interconnect(origin=det)
+
+    async def _sound_interconnect(self, origin: DetectorState) -> None:
+        """Sound every siren-capable detector when one trips (opt-in).
+
+        Honours the same EVENT-mode silencing as the SMS alert: detectors in a
+        silenced zone stay quiet even venue-wide. Each siren self-stops after
+        `siren_max_duration_s` so a dropped broker can't latch the buzzers on.
+        """
+        if not self._cfg.siren_interconnect or self._siren is None:
+            return
+        dur = self._cfg.siren_max_duration_s
+        for d in self._cfg.detectors:
+            if d.siren_property is None:
+                continue  # device exposes no settable siren
+            if self.mode is Mode.EVENT and d.zone in self._cfg.silent_zones_in_event:
+                continue
+            payload = {d.siren_property: True, "max_duration": dur}
+            if await self._siren(d.friendly_name, payload):
+                self._interconnect_active = True
+        await self._db.audit(
+            "siren_interconnect", {"origin": origin.friendly_name}, actor="detector",
+        )
+
+    async def silence_interconnect(self, actor: str = "operator") -> None:
+        """Operator 'all clear' — drop every remote siren before it times out."""
+        if self._siren is None or not self._interconnect_active:
+            return
+        for d in self._cfg.detectors:
+            if d.siren_property is not None:
+                await self._siren(d.friendly_name, {d.siren_property: False})
+        self._interconnect_active = False
+        await self._db.audit("siren_silence", {}, actor=actor)
 
     # ---- UPS ----------------------------------------------------------
 

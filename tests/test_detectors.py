@@ -121,3 +121,88 @@ def test_set_detectors_preserves_live_state(tmp_path):
         assert {d.friendly_name for d in cfg.detectors} == {"heat_a", "smoke_b"}
 
     asyncio.run(go())
+
+
+def _siren_machine(tmp_path, *, interconnect=True):
+    """A machine with two siren-capable detectors (one in a silenced zone) and
+    a fake siren publisher that records every /set command."""
+    settings = Settings(db_path=str(tmp_path / "t.db"))
+    cfg = YamlConfig(
+        siren_interconnect=interconnect,
+        siren_max_duration_s=300,
+        silent_zones_in_event=["stage"],
+        detectors=[
+            Detector(friendly_name="smoke_foh", label="FoH", kind="smoke",
+                     alarm_property="smoke", siren_property="alarm", zone="front_of_house"),
+            Detector(friendly_name="smoke_stage", label="Stage", kind="smoke",
+                     alarm_property="smoke", siren_property="alarm", zone="stage"),
+            Detector(friendly_name="sensor_only", label="Sensor", kind="smoke",
+                     alarm_property="smoke", zone="technical"),  # no siren_property
+        ],
+    )
+    machine = StateMachine(settings, cfg, Database(settings.db_path), Notifier(settings))
+    sent: list[tuple[str, dict]] = []
+
+    async def fake_siren(name, payload):
+        sent.append((name, payload))
+        return True
+
+    machine.set_siren(fake_siren)
+    return machine, sent
+
+
+def test_interconnect_sounds_every_siren_capable_detector(tmp_path):
+    machine, sent = _siren_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        # Both siren-capable detectors sound (incl. origin); the sensor-only one
+        # is skipped. Each carries the property True + the duration backstop.
+        assert {n for n, _ in sent} == {"smoke_foh", "smoke_stage"}
+        assert all(p["alarm"] is True and p["max_duration"] == 300 for _, p in sent)
+        assert machine._interconnect_active
+
+    asyncio.run(go())
+
+
+def test_interconnect_respects_event_silenced_zone(tmp_path):
+    machine, sent = _siren_machine(tmp_path)
+
+    async def go():
+        from datetime import timedelta
+        from app.models import now
+        await machine._db.init()
+        await machine.arm_event(now() + timedelta(hours=1), actor="test")  # -> EVENT
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        # The stage detector is in a silenced zone — it stays quiet venue-wide.
+        assert {n for n, _ in sent} == {"smoke_foh"}
+
+    asyncio.run(go())
+
+
+def test_interconnect_disabled_sounds_nothing(tmp_path):
+    machine, sent = _siren_machine(tmp_path, interconnect=False)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        assert sent == []
+
+    asyncio.run(go())
+
+
+def test_silence_interconnect_clears_all_sirens(tmp_path):
+    machine, sent = _siren_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        sent.clear()
+        await machine.silence_interconnect(actor="test")
+        # Every siren-capable detector gets an explicit off; sensor-only skipped.
+        assert {n for n, _ in sent} == {"smoke_foh", "smoke_stage"}
+        assert all(p["alarm"] is False for _, p in sent)
+        assert not machine._interconnect_active
+
+    asyncio.run(go())

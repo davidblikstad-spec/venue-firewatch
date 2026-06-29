@@ -127,6 +127,9 @@ class MqttBridge:
         self._cfg = cfg
         self._machine = machine
         self._registry = registry or DeviceRegistry()
+        # Live aiomqtt client while connected; None when down so publish_set
+        # can drop (rather than block) commands during a reconnect.
+        self._client: aiomqtt.Client | None = None
 
     async def run(self) -> None:
         """Connect-and-subscribe loop with automatic reconnect."""
@@ -139,19 +142,38 @@ class MqttBridge:
                     username=self._s.mqtt_username,
                     password=self._s.mqtt_password,
                 ) as client:
-                    # bridge/# for Z2M state + device inventory; +/ for every
-                    # device's state. Wildcard so detectors added from the
-                    # dashboard are picked up without reconnecting.
-                    await client.subscribe(f"{base}/bridge/#")
-                    await client.subscribe(f"{base}/+")
-                    log.info("subscribed to %s/+ and bridge/#", base)
-                    await self._machine.set_mqtt_connected(True)
-                    async for message in client.messages:
-                        await self._handle(str(message.topic), message.payload)
+                    self._client = client
+                    try:
+                        # bridge/# for Z2M state + device inventory; +/ for every
+                        # device's state. Wildcard so detectors added from the
+                        # dashboard are picked up without reconnecting.
+                        await client.subscribe(f"{base}/bridge/#")
+                        await client.subscribe(f"{base}/+")
+                        log.info("subscribed to %s/+ and bridge/#", base)
+                        await self._machine.set_mqtt_connected(True)
+                        async for message in client.messages:
+                            await self._handle(str(message.topic), message.payload)
+                    finally:
+                        self._client = None
             except aiomqtt.MqttError as exc:
                 log.warning("MQTT connection lost (%s); retrying in 5s", exc)
+                self._client = None
                 await self._machine.set_mqtt_connected(False)
                 await asyncio.sleep(5)
+
+    async def publish_set(self, friendly_name: str, payload: dict) -> bool:
+        """Publish to a device's `/set` topic (e.g. to sound a siren).
+
+        Returns False if the broker is currently disconnected, in which case
+        the command is dropped — the caller logs/audits it.
+        """
+        client = self._client
+        if client is None:
+            log.warning("set for %s dropped: MQTT disconnected", friendly_name)
+            return False
+        base = self._s.mqtt_base_topic
+        await client.publish(f"{base}/{friendly_name}/set", json.dumps(payload))
+        return True
 
     async def _handle(self, topic: str, raw: bytes) -> None:
         base = self._s.mqtt_base_topic

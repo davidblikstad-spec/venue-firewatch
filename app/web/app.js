@@ -302,6 +302,11 @@ $("endBtn").addEventListener("click", async () => {
   await fetch("/api/event/end", { method: "POST" });
 });
 
+$("silenceBtn").addEventListener("click", async () => {
+  if (!confirm("Silence all sirens now? Only do this once the venue is confirmed clear.")) return;
+  await fetch("/api/siren/silence", { method: "POST" });
+});
+
 document.querySelectorAll(".seg-btn").forEach((b) =>
   b.addEventListener("click", async () => {
     await fetch("/api/sms/policy", {

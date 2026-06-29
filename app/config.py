@@ -108,6 +108,9 @@ class Detector(BaseModel):
     zone: str = "default"
     # Hours after which a missing check-in is treated as a fault (supervision).
     offline_after_hours: float = 6.0
+    # Settable Z2M property that sounds this device's buzzer. None = can't be
+    # remotely sounded (a sensor with no siren). "alarm" for Develco SMSZB-120.
+    siren_property: str | None = None
 
 
 class YamlConfig(BaseModel):
@@ -119,6 +122,11 @@ class YamlConfig(BaseModel):
     detectors: list[Detector] = Field(default_factory=list)
     # Zones that EVENT mode silences. Detectors in other zones still alert.
     silent_zones_in_event: list[str] = Field(default_factory=lambda: ["stage"])
+    # When true, a real (non-silenced) alarm sounds every siren-capable detector.
+    siren_interconnect: bool = False
+    # Seconds each remote siren self-stops after — the safety backstop so a
+    # dropped broker or missed clear can't latch the buzzers on forever.
+    siren_max_duration_s: int = 300
 
 
 @lru_cache
