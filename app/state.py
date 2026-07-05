@@ -19,6 +19,7 @@ from .models import (
     BalanceState,
     DetectorState,
     LinkState,
+    MeshDeviceState,
     Mode,
     Severity,
     SmsPolicy,
@@ -30,6 +31,11 @@ from .models import (
 from .notify import Notifier
 
 log = logging.getLogger("firewatch.state")
+
+# Hours without a report before a mesh router (plug) is shown offline. Routers
+# beacon far more often than this; the window is generous to avoid flapping and
+# is only a display hint — mesh devices never raise SMS alerts.
+_MESH_OFFLINE_HOURS = 2
 
 # Called whenever state changes so the web layer can push to connected clients.
 Listener = Callable[[SystemSnapshot], Awaitable[None]]
@@ -84,6 +90,14 @@ class StateMachine:
             )
             for d in cfg.detectors
         }
+        # Mains-powered routers (smart plugs/relays) that aren't detectors,
+        # discovered live from their Z2M state messages. Keyed by friendly_name.
+        self._mesh: dict[str, MeshDeviceState] = {}
+        # Repeaters we've had a Z2M availability reading for (so we don't alert
+        # on the cold-start baseline) and those we've alerted as down (so the
+        # recovery notice only fires for a repeater we actually reported down).
+        self._mesh_avail_seen: set[str] = set()
+        self._mesh_down: set[str] = set()
         self._listeners: list[Listener] = []
 
     # ---- wiring -------------------------------------------------------
@@ -152,6 +166,7 @@ class StateMachine:
             sms_policy=self.sms_policy,
             event_until=self.event_until,
             detectors=list(self._detectors.values()),
+            mesh=sorted(self._mesh.values(), key=lambda d: d.friendly_name),
             ups=self.ups,
             balance=self.balance,
             link=self.link,
@@ -224,6 +239,18 @@ class StateMachine:
                             self._msg("detector_offline", label=det.label, zone=det.zone),
                             actor="supervision",
                         )
+        # Mesh routers: fall back to a last_seen heuristic (display only, no SMS)
+        # ONLY for repeaters we get no Z2M availability signal for. When
+        # availability is enabled, on_mesh_availability owns the online flag and
+        # the SMS, so we must not second-guess it here.
+        for name, dev in self._mesh.items():
+            if name in self._mesh_avail_seen:
+                continue
+            if dev.last_seen:
+                offline = (now() - dev.last_seen) > timedelta(hours=_MESH_OFFLINE_HOURS)
+                if offline == dev.online:
+                    dev.online = not offline
+                    changed = True
         if changed:
             await self._publish()
 
@@ -254,6 +281,98 @@ class StateMachine:
         elif det.battery is not None and det.battery <= 10:
             await self._raise(Severity.WARNING, self._msg("detector_low_battery", label=det.label, battery=det.battery), actor="supervision")
 
+        await self._publish()
+
+    async def sync_mesh_devices(self, routers: list[dict]) -> None:
+        """Seed/prune the mesh card from Z2M's device inventory.
+
+        Routers report state only on change and Z2M doesn't retain it, so a plug
+        that's been idle since startup would never appear. Seeding from the
+        (retained) inventory makes every repeater visible right away; live
+        fields (last_seen, linkquality, load) fill in as reports arrive.
+        Configured detectors are skipped — they belong on the detector card.
+        """
+        configured = {d.friendly_name for d in self._cfg.detectors}
+        desired = {r["friendly_name"] for r in routers if r["friendly_name"] not in configured}
+        changed = False
+        for r in routers:
+            fn = r["friendly_name"]
+            if fn in configured:
+                continue
+            dev = self._mesh.get(fn)
+            if dev is None:
+                # online=False until it actually reports; the card shows "no
+                # data yet" (last_seen is None) rather than a false "online".
+                self._mesh[fn] = MeshDeviceState(
+                    friendly_name=fn, vendor=r.get("vendor"), model=r.get("model"), online=False
+                )
+                changed = True
+            elif (dev.vendor, dev.model) != (r.get("vendor"), r.get("model")):
+                dev.vendor, dev.model = r.get("vendor"), r.get("model")
+                changed = True
+        for fn in [fn for fn in self._mesh if fn not in desired]:
+            del self._mesh[fn]
+            changed = True
+        if changed:
+            await self._publish()
+
+    async def on_mesh_update(
+        self, friendly_name: str, payload: dict, vendor: str | None = None, model: str | None = None
+    ) -> None:
+        """Record a report from a mains router (plug) so it shows on the mesh card.
+
+        These are repeaters, not detectors: we track reachability and link
+        quality for network visibility only — they never trigger alerts.
+        """
+        dev = self._mesh.get(friendly_name)
+        if dev is None:
+            dev = MeshDeviceState(friendly_name=friendly_name, vendor=vendor, model=model)
+            self._mesh[friendly_name] = dev
+        dev.last_seen = now()
+        dev.online = True
+        self.link.last_message = dev.last_seen
+        if "linkquality" in payload:
+            dev.linkquality = payload["linkquality"]
+        if isinstance(payload.get("state"), str):
+            dev.state = payload["state"]
+        if isinstance(payload.get("power"), (int, float)):
+            dev.power = payload["power"]
+        await self._publish()
+
+    async def on_mesh_availability(
+        self, friendly_name: str, online: bool, vendor: str | None = None, model: str | None = None
+    ) -> None:
+        """Authoritative reachability for a mesh repeater, from Z2M availability.
+
+        Sends a WARNING SMS when a repeater goes down and an INFO when it comes
+        back — but never on the first reading (the cold-start baseline), so a
+        FireWatch or Z2M restart doesn't fire a spurious alert.
+        """
+        dev = self._mesh.get(friendly_name)
+        if dev is None:
+            dev = MeshDeviceState(friendly_name=friendly_name, vendor=vendor, model=model)
+            self._mesh[friendly_name] = dev
+        prev_online = dev.online
+        dev.online = online
+        if online:
+            dev.last_seen = now()
+
+        first = friendly_name not in self._mesh_avail_seen
+        self._mesh_avail_seen.add(friendly_name)
+        if first:
+            await self._publish()  # establish baseline silently
+            return
+
+        if not online and prev_online:
+            self._mesh_down.add(friendly_name)
+            await self._raise(
+                Severity.WARNING, self._msg("repeater_offline", label=friendly_name), actor="supervision"
+            )
+        elif online and not prev_online and friendly_name in self._mesh_down:
+            self._mesh_down.discard(friendly_name)
+            await self._raise(
+                Severity.INFO, self._msg("repeater_online", label=friendly_name), actor="supervision"
+            )
         await self._publish()
 
     async def _handle_alarm(self, det: DetectorState) -> None:

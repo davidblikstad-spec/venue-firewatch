@@ -37,6 +37,18 @@ SIREN_PROPERTIES = ("warning", "alarm", "siren", "squawk")
 _ACCESS_SET = 0b010  # Z2M access bitmask: bit 1 = settable (publishable to /set)
 
 
+def _parse_online(raw: bytes) -> bool:
+    """Decode a Z2M availability payload. Handles both the JSON form
+    ``{"state":"online"}`` and the legacy bare ``online``/``offline`` string."""
+    text = raw.decode(errors="ignore").strip()
+    try:
+        parsed = json.loads(text)
+        value = parsed.get("state") if isinstance(parsed, dict) else parsed
+    except (ValueError, TypeError):
+        value = text.strip('"')
+    return value == "online"
+
+
 def _walk_exposes(exposes: list) -> list[dict]:
     """Flatten Z2M's (possibly nested) exposes tree into leaf features."""
     leaves: list[dict] = []
@@ -91,6 +103,7 @@ def _summarize_device(entry: dict) -> dict | None:
         "vendor": definition.get("vendor"),
         "model": definition.get("model"),
         "description": definition.get("description"),
+        "power_source": entry.get("power_source"),
         "binary_properties": binary_props,
         "alarm_properties": alarm_props,
         "siren_properties": siren_props,
@@ -98,6 +111,9 @@ def _summarize_device(entry: dict) -> dict | None:
         "suggested_siren_property": siren_props[0] if siren_props else None,
         "suggested_kind": kind,
         "is_alarm_device": bool(alarm_props),
+        # Mains-powered routers (smart plugs, relays) extend the mesh as
+        # repeaters. We surface them on the dashboard's mesh card.
+        "is_router": entry.get("type") == "Router",
     }
 
 
@@ -138,6 +154,15 @@ class DeviceRegistry:
             key=lambda d: (not d["is_alarm_device"], d["friendly_name"]),
         )
 
+    def get(self, friendly_name: str) -> dict | None:
+        return self._devices.get(friendly_name)
+
+    def routers(self) -> list[dict]:
+        """Mains-powered routers that aren't alarm devices — the mesh repeaters
+        (smart plugs/relays) shown on the dashboard, seeded from the inventory."""
+        return [d for d in self._devices.values()
+                if d.get("is_router") and not d.get("is_alarm_device")]
+
 
 class MqttBridge:
     def __init__(
@@ -173,7 +198,11 @@ class MqttBridge:
                         # dashboard are picked up without reconnecting.
                         await client.subscribe(f"{base}/bridge/#")
                         await client.subscribe(f"{base}/+")
-                        log.info("subscribed to %s/+ and bridge/#", base)
+                        # +/availability is a second level down, so the /+ wildcard
+                        # above doesn't cover it — subscribe explicitly to get the
+                        # online/offline signal Z2M publishes per device.
+                        await client.subscribe(f"{base}/+/availability")
+                        log.info("subscribed to %s/+, +/availability and bridge/#", base)
                         await self._machine.set_mqtt_connected(True)
                         async for message in client.messages:
                             await self._handle(str(message.topic), message.payload)
@@ -205,6 +234,9 @@ class MqttBridge:
 
         if sub == "bridge/devices":
             self._registry.update(raw)
+            # Seed the mesh card from the (retained) inventory so repeaters show
+            # up immediately, before their first live state message arrives.
+            await self._machine.sync_mesh_devices(self._registry.routers())
             return
         if sub == "bridge/state":
             # Z2M publishes either a bare "online"/"offline" or {"state": ...}.
@@ -219,10 +251,34 @@ class MqttBridge:
         if sub.startswith("bridge/"):
             return  # other bridge info/logging — not a detector
 
+        if sub.endswith("/availability"):
+            # Z2M's per-device reachability. We act on it only for mesh routers
+            # (plugs/repeaters) — detectors have their own check-in supervision.
+            name = sub[: -len("/availability")]
+            summary = self._registry.get(name)
+            if summary and summary.get("is_router") and not summary.get("is_alarm_device"):
+                await self._machine.on_mesh_availability(
+                    name, _parse_online(raw), summary.get("vendor"), summary.get("model")
+                )
+            return
+
         # Only forward updates for currently-configured detectors. Look the
         # alarm property up live so dashboard edits take effect immediately.
         det = next((d for d in self._cfg.detectors if d.friendly_name == sub), None)
         if det is None:
+            # Not a monitored detector — but if it's a mains-powered router
+            # (e.g. a smart plug added as a repeater), surface it on the mesh
+            # card so its presence and link quality are visible.
+            summary = self._registry.get(sub)
+            if summary and summary.get("is_router") and not summary.get("is_alarm_device"):
+                try:
+                    payload = json.loads(raw)
+                except (ValueError, TypeError):
+                    return
+                if isinstance(payload, dict):
+                    await self._machine.on_mesh_update(
+                        sub, payload, summary.get("vendor"), summary.get("model")
+                    )
             return
 
         try:

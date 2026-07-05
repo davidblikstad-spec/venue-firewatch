@@ -41,6 +41,20 @@ class DetectorState(BaseModel):
     online: bool = True
 
 
+class MeshDeviceState(BaseModel):
+    """A mains-powered Zigbee router (smart plug, relay) that isn't a monitored
+    detector. Shown on the dashboard mesh card so you can see the repeaters that
+    extend the network — their reachability and link quality."""
+    friendly_name: str
+    vendor: str | None = None
+    model: str | None = None
+    online: bool = True
+    linkquality: int | None = None   # Z2M LQI (0–255)
+    state: str | None = None         # "ON"/"OFF" for a switchable plug, if reported
+    power: float | None = None       # instantaneous load in W, if the plug meters it
+    last_seen: datetime | None = None
+
+
 class UpsState(BaseModel):
     # False until the NUT poller actually reads the UPS. Distinguishes
     # "no UPS configured / not wired" from a UPS we've successfully reached,
@@ -103,6 +117,7 @@ class SystemSnapshot(BaseModel):
     sms_policy: SmsPolicy = SmsPolicy.FAILOVER
     event_until: datetime | None = None
     detectors: list[DetectorState] = Field(default_factory=list)
+    mesh: list[MeshDeviceState] = Field(default_factory=list)
     ups: UpsState | None = None
     balance: BalanceState | None = None
     link: LinkState = Field(default_factory=LinkState)

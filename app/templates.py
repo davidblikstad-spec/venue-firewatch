@@ -31,6 +31,16 @@ SMS_TEMPLATES: dict[str, dict] = {
         "placeholders": ["label", "battery"],
         "default": "low battery on detector {label} ({battery}%). Replace the battery soon.",
     },
+    "repeater_offline": {
+        "label": "Repeater / plug offline",
+        "placeholders": ["label"],
+        "default": "repeater {label} went offline. The Zigbee mesh may be weakened — check the device.",
+    },
+    "repeater_online": {
+        "label": "Repeater / plug back online",
+        "placeholders": ["label"],
+        "default": "repeater {label} is back online.",
+    },
     "ups_on_battery": {
         "label": "Mains lost — UPS on backup power",
         "placeholders": ["charge", "runtime_min", "grid_voltage", "load"],

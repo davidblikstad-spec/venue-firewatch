@@ -85,6 +85,9 @@ function render() {
     list.innerHTML = state.detectors.map(detRow).join("");
   }
 
+  // Mesh repeaters (smart plugs etc.)
+  renderMesh();
+
   // Zigbee/MQTT pipeline health
   renderLink();
 
@@ -188,6 +191,45 @@ function detRow(d) {
       <div class="det-metrics">${metrics}</div>
     </div>
     <span class="det-badge badge-${status}">${badge}</span>
+  </li>`;
+}
+
+// Mains routers (smart plugs / relays) that act as mesh repeaters. Reuses the
+// detector row layout: online/offline LED + link quality, plus on/off and load
+// if the plug reports them.
+function renderMesh() {
+  const el = $("mesh");
+  const m = (state && state.mesh) || [];
+  if (!m.length) {
+    el.innerHTML = '<li class="empty">No mains devices seen yet</li>';
+    return;
+  }
+  el.innerHTML = m.map(meshRow).join("");
+}
+
+function meshRow(d) {
+  // No report yet (just seeded from the inventory): show it as present but
+  // awaiting data rather than a misleading online/offline.
+  const seen = !!d.last_seen;
+  const status = !seen ? "offline" : (d.online ? "ok" : "offline");
+  const badge = !seen ? "…" : (d.online ? (d.state || "OK") : "OFFLINE");
+  const sub = [d.vendor, d.model].filter(Boolean).join("  ·  ");
+  const metrics = [
+    d.power != null ? metric("load", `${Number(d.power).toFixed(0)} W`) : "",
+    d.linkquality != null ? signalCell(d.linkquality) : "",
+    metric("seen", timeAgo(d.last_seen)),
+  ].filter(Boolean).join("");
+  const seenTitle = d.last_seen ? `Last message: ${new Date(d.last_seen).toLocaleString()}` : "No message received yet";
+  return `<li class="det" data-status="${status}" title="${esc(seenTitle)}">
+    <span class="led"></span>
+    <div class="det-main">
+      <div class="det-head">
+        <span class="det-name">${esc(d.friendly_name)}</span>
+        <span class="det-zone">${esc(sub)}</span>
+      </div>
+      <div class="det-metrics">${metrics}</div>
+    </div>
+    <span class="det-badge badge-${status}">${esc(badge)}</span>
   </li>`;
 }
 
