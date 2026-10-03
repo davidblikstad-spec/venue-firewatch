@@ -35,10 +35,13 @@ class Settings(BaseSettings):
     mqtt_base_topic: str = "zigbee2mqtt"
 
     # --- GatewayAPI (primary SMS) ---
+    # base_url must match the region the account lives in: https://gatewayapi.com
+    # for a Danish account, https://gatewayapi.eu for an EU one. A token issued by
+    # one region is rejected by the other, so the two always move together.
     # Pull the exact endpoint from your GatewayAPI dashboard. The token is
     # normally set from the dashboard Settings page (stored in the db) — a value
     # saved there overrides this env var. Leave unset to manage it via the UI.
-    gatewayapi_base_url: str = "https://gatewayapi.com"
+    gatewayapi_base_url: str = "https://gatewayapi.eu"
     gatewayapi_token: str | None = None
     gatewayapi_sender: str = "FireWatch"  # max 11 chars alphanumeric
     gatewayapi_timeout_s: float = 9.0

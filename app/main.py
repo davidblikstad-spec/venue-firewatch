@@ -121,7 +121,9 @@ class _Clients:
     async def push(self, snap: SystemSnapshot) -> None:
         dead = []
         data = snap.model_dump(mode="json")
-        for ws in self._sockets:
+        # Iterate a snapshot: every send_json awaits, which lets a disconnecting
+        # dashboard's handler reach remove() and mutate the live set mid-loop.
+        for ws in tuple(self._sockets):
             try:
                 await ws.send_json({"type": "snapshot", "data": data})
             except Exception:
@@ -534,6 +536,7 @@ async def get_settings_status() -> JSONResponse:
             "configured": bool(settings.gatewayapi_token),
             "masked": _mask_token(settings.gatewayapi_token),
             "sender": settings.gatewayapi_sender,
+            "base_url": settings.gatewayapi_base_url,
         },
         "ups": {
             "name": settings.ups_name or "",
@@ -1084,7 +1087,8 @@ if(location.hash){const b=document.querySelector('.sidenav button[data-sec="'+lo
 async function refresh(){const r=await fetch("/api/settings");const d=await r.json();
   if(document.activeElement!==document.getElementById("venue"))document.getElementById("venue").value=d.venue||"";
   const g=d.gatewayapi;document.getElementById("gwStatus").textContent=
-    g.configured?("Configured (token "+g.masked+"), sender “"+g.sender+"”"):("Not configured — SMS via GatewayAPI is disabled. Sender “"+g.sender+"”.");
+    (g.configured?("Configured (token "+g.masked+"), sender “"+g.sender+"”"):("Not configured — SMS via GatewayAPI is disabled. Sender “"+g.sender+"”."))
+    +" Endpoint: "+g.base_url+". A token only works against the region it was issued in.";
   const u=d.ups;const us=document.getElementById("upsStatus");
   if(!u.name){us.textContent="Not configured — no UPS monitored."}
   else{us.textContent="Monitoring “"+u.name+"” — "+(u.monitored&&u.online?"reachable"+(u.status?" ("+u.status+")":""):"not reachable yet")+", every "+u.poll_seconds+"s."}
