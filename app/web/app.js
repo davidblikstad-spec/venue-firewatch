@@ -11,8 +11,18 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
 
-  ws.onopen = () => setConn("up");
+  // Keepalive: a tiny ping every 10s so the display tablet's Wi-Fi never sits
+  // idle, plus dead-socket detection — if nothing (pong/snapshot) has arrived
+  // for 30s, the link is silently gone, so force a reconnect.
+  let lastRx = Date.now();
+  const keepalive = setInterval(() => {
+    if (Date.now() - lastRx > 30000) { ws.close(); return; }
+    if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+  }, 10000);
+
+  ws.onopen = () => { lastRx = Date.now(); setConn("up"); };
   ws.onclose = async (ev) => {
+    clearInterval(keepalive);
     setConn("down");
     if (ev.code === 4001) { location.href = "/login"; return; }
     // A 403 handshake rejection (e.g. session cleared by a server restart)
@@ -26,6 +36,7 @@ function connect() {
   };
   ws.onerror = () => ws.close();
   ws.onmessage = (ev) => {
+    lastRx = Date.now();
     const msg = JSON.parse(ev.data);
     if (msg.type === "snapshot") { state = msg.data; render(); loadAudit(); }
   };

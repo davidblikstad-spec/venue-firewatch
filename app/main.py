@@ -1220,7 +1220,10 @@ async def ws(socket: WebSocket, token: str | None = Query(default=None)) -> None
     await socket.send_json({"type": "snapshot", "data": machine.snapshot().model_dump(mode="json")})
     try:
         while True:
-            await socket.receive_text()
+            # Clients send "ping" every ~10s as a keepalive (keeps kiosk
+            # tablets' Wi-Fi from idling out and lets them spot a dead socket).
+            if await socket.receive_text() == "ping":
+                await socket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         pass
     finally:
