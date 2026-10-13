@@ -164,6 +164,7 @@ function signalCell(lqi) {
 function detRow(d) {
   let status = "ok", badge = "OK";
   if (d.alarm) { status = "alarm"; badge = "ALARM"; }
+  else if (d.alarm_unconfirmed) { status = "fault"; badge = "UNCONFIRMED"; }
   else if (!d.online) { status = "offline"; badge = "OFFLINE"; }
   else if (d.fault) { status = "fault"; badge = "FAULT"; }
 
@@ -368,6 +369,7 @@ function summarize(r) {
   const d = r.detail || {};
   switch (r.kind) {
     case "alarm": return `ALARM ${d.detector}${d.silenced ? " (silenced)" : ""}`;
+    case "alarm_replay": return `stale alarm ignored: ${d.detector} (last report ${new Date(d.last_seen).toLocaleString()})`;
     case "mode_change": return `mode ${d.from} → ${d.to}`;
     case "sms": return `SMS ${d.policy}: ${trunc(d.text)}`;
     case "dlr": return `DLR ${d.message_id}: ${d.status}`;

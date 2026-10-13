@@ -9,7 +9,7 @@ end time and reverts to NORMAL on its own.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
 from .config import Detector, Recipient, Settings, YamlConfig
@@ -36,6 +36,26 @@ log = logging.getLogger("firewatch.state")
 # beacon far more often than this; the window is generous to avoid flapping and
 # is only a display hint — mesh devices never raise SMS alerts.
 _MESH_OFFLINE_HOURS = 2
+
+# A detector update whose Z2M `last_seen` (time of the device's last real radio
+# message) is older than this is a cached-state replay, not a fresh detection.
+# Z2M republishes its state cache on startup, so a stale `smoke: true` that
+# never got its clear would otherwise re-trip the alarm on every reboot. A real
+# report is published within milliseconds of reception, so this is generous.
+_REPLAY_MAX_AGE_S = 60
+
+
+def _parse_last_seen(value) -> datetime | None:
+    """Z2M `last_seen`: ISO 8601 (UTC or local offset) or epoch milliseconds."""
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+        if isinstance(value, str):
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else None
+    except (ValueError, OverflowError, OSError):
+        pass
+    return None
 
 # Called whenever state changes so the web layer can push to connected clients.
 Listener = Callable[[SystemSnapshot], Awaitable[None]]
@@ -277,9 +297,31 @@ class StateMachine:
         det.alarm = bool(payload.get(alarm_prop, det.alarm))
 
         if det.alarm and not was_alarm:
-            await self._handle_alarm(det)
+            # Without last_seen (Z2M option disabled) we can't tell a replay
+            # from a detection, so fall through and alarm — fail safe.
+            reported = _parse_last_seen(payload.get("last_seen"))
+            age = (now() - reported).total_seconds() if reported else None
+            if age is not None and age > _REPLAY_MAX_AGE_S:
+                det.alarm = False
+                if not det.alarm_unconfirmed:
+                    det.alarm_unconfirmed = True
+                    log.warning(
+                        "ignoring replayed %s=true for %s (device last reported %s, %.0fs ago)",
+                        alarm_prop, det.label, reported.isoformat(), age,
+                    )
+                    await self._db.audit(
+                        "alarm_replay",
+                        {"detector": det.friendly_name, "zone": det.zone, "last_seen": reported.isoformat()},
+                        severity=Severity.WARNING.value,
+                        actor="detector",
+                    )
+            else:
+                det.alarm_unconfirmed = False
+                await self._handle_alarm(det)
         elif det.battery is not None and det.battery <= 10:
             await self._raise(Severity.WARNING, self._msg("detector_low_battery", label=det.label, battery=det.battery), actor="supervision")
+        if payload.get(alarm_prop) is False:
+            det.alarm_unconfirmed = False  # device (or cache) now reports clear
 
         await self._publish()
 

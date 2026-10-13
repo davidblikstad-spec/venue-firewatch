@@ -232,3 +232,61 @@ def test_silence_interconnect_clears_all_sirens(tmp_path):
         assert not machine._interconnect_active
 
     asyncio.run(go())
+
+
+def _iso(seconds_ago: float) -> str:
+    from datetime import timedelta
+    from app.models import now
+    return (now() - timedelta(seconds=seconds_ago)).isoformat().replace("+00:00", "Z")
+
+
+def test_replayed_cached_alarm_is_ignored(tmp_path):
+    # Z2M republishes its state cache on startup; a stale smoke=true whose
+    # last_seen is old must not trip SMS or sirens — only flag "unconfirmed".
+    machine, sent = _siren_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update(
+            "smoke_foh", {"smoke": True, "last_seen": _iso(3 * 86400)}, "smoke")
+        det = machine._detectors["smoke_foh"]
+        assert det.alarm is False and det.alarm_unconfirmed is True
+        assert sent == []
+        kinds = [r["kind"] for r in await machine._db.recent_audit(10)]
+        assert "alarm_replay" in kinds and "alarm" not in kinds
+
+        # A fresh report from the device itself is a real alarm.
+        await machine.on_detector_update(
+            "smoke_foh", {"smoke": True, "last_seen": _iso(0.2)}, "smoke")
+        assert det.alarm is True and det.alarm_unconfirmed is False
+        assert {n for n, _ in sent} == {"smoke_foh", "smoke_stage"}
+
+    asyncio.run(go())
+
+
+def test_replay_flag_clears_when_device_reports_clear(tmp_path):
+    machine, _ = _siren_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update(
+            "smoke_foh", {"smoke": True, "last_seen": 1_600_000_000_000}, "smoke")  # epoch ms
+        det = machine._detectors["smoke_foh"]
+        assert det.alarm_unconfirmed is True
+        await machine.on_detector_update("smoke_foh", {"smoke": False, "last_seen": _iso(0)}, "smoke")
+        assert det.alarm is False and det.alarm_unconfirmed is False
+
+    asyncio.run(go())
+
+
+def test_alarm_without_last_seen_still_trips(tmp_path):
+    # No last_seen (Z2M option disabled): can't tell a replay apart -> fail safe.
+    machine, sent = _siren_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        assert machine._detectors["smoke_foh"].alarm is True
+        assert sent
+
+    asyncio.run(go())

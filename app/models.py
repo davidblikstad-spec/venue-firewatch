@@ -33,6 +33,9 @@ class DetectorState(BaseModel):
     zone: str
     kind: str
     alarm: bool = False
+    # Z2M replayed a cached alarm at startup that the device hasn't confirmed
+    # with a fresh report. Shown on the dashboard; raises no SMS or sirens.
+    alarm_unconfirmed: bool = False
     temperature: float | None = None
     battery: int | None = None
     linkquality: int | None = None   # Z2M LQI (0–255); mesh signal strength
