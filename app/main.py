@@ -877,6 +877,11 @@ async def put_recipients(recipients: list[Recipient]) -> JSONResponse:
         r.msisdn = digits
     if len({r.msisdn for r in recipients}) != len(recipients):
         return JSONResponse({"error": "duplicate phone number"}, status_code=400)
+    for r in recipients:
+        if not r.categories:
+            return JSONResponse({"error": f"{r.name} isn't set to receive any messages"}, status_code=400)
+    if recipients and not any("fire" in r.categories for r in recipients):
+        return JSONResponse({"error": "at least one receiver must get fire alarms"}, status_code=400)
 
     await db.set(_RECIPIENTS_KEY, json.dumps([r.model_dump() for r in recipients]))
     machine.set_recipients(recipients)
@@ -953,12 +958,15 @@ async def settings_page():
 .ph .reset{color:var(--live);cursor:pointer;text-decoration:underline;margin-left:8px}
 .tpl{margin-bottom:18px} .tpl:last-child{margin-bottom:0}
 .tpl h3{font-size:.9rem;margin:0 0 2px} .tpl .custom{color:var(--live);font-size:.72rem}
-.rec{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.rec{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
 .rec input{width:auto;min-width:0;margin:0}
 .rec .nm{flex:2} .rec .num{flex:2} .rec .pri{flex:0 0 70px;text-align:center}
 .rec .del{flex:0 0 auto;margin:0;padding:8px 11px;background:transparent;border:1px solid var(--hairline);color:var(--alarm);border-radius:8px;cursor:pointer;font-weight:700}
 .rechead{display:flex;gap:8px;font-size:.72rem;color:var(--muted,#9aa);margin-bottom:6px}
-.rechead .nm{flex:2} .rechead .num{flex:2} .rechead .pri{flex:0 0 70px;text-align:center} .rechead .sp{flex:0 0 38px}
+.rechead .nm{flex:2} .rechead .num{flex:2} .rechead .pri{flex:0 0 70px;text-align:center} .rechead .cats{flex:0 0 auto;min-width:228px} .rechead .sp{flex:0 0 38px}
+.rec .cats{display:flex;gap:4px;flex:0 0 auto}
+.rec .cat{display:inline-flex;align-items:center;gap:4px;margin:0;padding:6px 9px;border:1px solid var(--hairline);border-radius:8px;font-size:.8rem;cursor:pointer;user-select:none;white-space:nowrap}
+.rec .cat input{width:auto;margin:0}
 .status{font-size:.82rem;color:var(--muted,#9aa);margin:0}
 .msg{font-size:.82rem;margin-top:10px;display:none}
 .msg.ok{color:var(--live)} .msg.err{color:var(--alarm)}
@@ -1033,6 +1041,7 @@ async def settings_page():
 <div class="card">
 <h2>Alert receivers</h2>
 <p class="status">Phone numbers that receive SMS alerts. International digits only, no '+' (e.g. 4799999999). Priority: lower numbers are alerted first; same priority alerts together; higher tiers are escalated to if an alert goes unacknowledged.</p>
+<p class="status">Choose which messages each receiver gets. <b>Fire</b>: smoke/heat alarms. <b>Power</b>: UPS on battery, battery low, mains restored. <b>Technical</b>: detectors or repeaters offline, low detector battery, internet switching to/from cellular. Escalation by priority happens among the receivers of that message type.</p>
 <div id="recList" style="margin-top:14px"><p class="status">Loading…</p></div>
 <div class="row"><button id="recAddBtn" type="button">+ Add receiver</button></div>
 <button id="recBtn">Save receivers</button>
@@ -1175,16 +1184,23 @@ function recRow(r){const row=document.createElement("div");row.className="rec";
   const num=document.createElement("input");num.className="num";num.placeholder="4799999999";num.value=r.msisdn||"";
   const pri=document.createElement("input");pri.className="pri";pri.type="number";pri.min="0";pri.value=(r.priority!=null?r.priority:0);
   const del=document.createElement("button");del.className="del";del.type="button";del.textContent="✕";del.title="Remove";del.onclick=()=>row.remove();
-  row.append(nm,num,pri,del);return row;}
+  const cats=document.createElement("span");cats.className="cats";const have=r.categories||REC_CATS.map(c=>c[0]);
+  REC_CATS.forEach(([k,label])=>{const l=document.createElement("label");l.className="cat";
+    const cb=document.createElement("input");cb.type="checkbox";cb.dataset.cat=k;cb.checked=have.includes(k);
+    l.append(cb,label);cats.appendChild(l);});
+  row.append(nm,num,pri,cats,del);return row;}
+const REC_CATS=[["fire","Fire"],["power","Power"],["technical","Technical"]];
 async function buildReceivers(){const list=document.getElementById("recList");
   const r=await fetch("/api/recipients");const d=await r.json().catch(()=>[]);
-  list.innerHTML='<div class="rechead"><span class="nm">Name</span><span class="num">Phone (intl digits)</span><span class="pri">Priority</span><span class="sp"></span></div>';
+  list.innerHTML='<div class="rechead"><span class="nm">Name</span><span class="num">Phone (intl digits)</span><span class="pri">Priority</span><span class="cats">Receives</span><span class="sp"></span></div>';
   (d||[]).forEach(x=>list.appendChild(recRow(x)));
   if(!d||!d.length)list.appendChild(recRow({}));}
 document.getElementById("recAddBtn").onclick=()=>document.getElementById("recList").appendChild(recRow({}));
 document.getElementById("recBtn").onclick=async()=>{const m=document.getElementById("recMsg");
-  const rows=[...document.querySelectorAll("#recList .rec")].map(row=>{const i=row.querySelectorAll("input");
-    return {name:i[0].value.trim(),msisdn:i[1].value.trim(),priority:parseInt(i[2].value,10)||0};}).filter(x=>x.name||x.msisdn);
+  const rows=[...document.querySelectorAll("#recList .rec")].map(row=>({
+    name:row.querySelector(".nm").value.trim(),msisdn:row.querySelector(".num").value.trim(),
+    priority:parseInt(row.querySelector(".pri").value,10)||0,
+    categories:[...row.querySelectorAll(".cat input:checked")].map(cb=>cb.dataset.cat)})).filter(x=>x.name||x.msisdn);
   const r=await fetch("/api/recipients",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(rows)});
   if(r.ok){show(m,true,"Saved "+rows.length+" receiver(s).");buildReceivers();}
   else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};

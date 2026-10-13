@@ -373,6 +373,7 @@ function summarize(r) {
     case "mode_change": return `mode ${d.from} → ${d.to}`;
     case "sms": return `SMS ${d.policy}: ${trunc(d.text)}`;
     case "dlr": return `DLR ${d.message_id}: ${d.status}`;
+    case "sms_unrouted": return `NOT SENT (no ${d.category} receivers): ${trunc(d.text)}`;
     case "escalation": return `ESCALATED to ${(d.recipients || []).join(", ")}`;
     case "fault": return `fault: ${trunc(JSON.stringify(d))}`;
     default: return `${r.kind}: ${trunc(JSON.stringify(d))}`;

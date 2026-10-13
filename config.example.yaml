@@ -5,13 +5,19 @@
 # priority: lower = alerted first. Same priority = alerted together.
 # When an alert goes unacknowledged for FW_ESCALATION_TIMEOUT_MINUTES,
 # it escalates to the next priority tier.
+# categories: which SMS this person gets (default: all three).
+#   fire = smoke/heat alarms; power = UPS on battery/low/restored;
+#   technical = detector/repeater offline, low battery, internet failover.
+# Escalation tiers are worked out among the receivers of each category.
 recipients:
   - name: Duty manager
     msisdn: "4799999999"
     priority: 0
+    categories: [fire, power]
   - name: Technical lead
     msisdn: "4788888888"
     priority: 0
+    categories: [fire, power, technical]
   - name: Venue owner
     msisdn: "4777777777"
     priority: 1

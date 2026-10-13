@@ -269,7 +269,7 @@ class StateMachine:
                         await self._raise(
                             Severity.WARNING,
                             self._msg("detector_offline", label=det.label, zone=det.zone),
-                            actor="supervision",
+                            actor="supervision", category="technical",
                         )
         for name, down_since in list(self._mesh_pending_down.items()):
             if (now() - down_since).total_seconds() < _REPEATER_OFFLINE_GRACE_S:
@@ -279,7 +279,8 @@ class StateMachine:
             if dev is not None and not dev.online:
                 self._mesh_down.add(name)
                 await self._raise(
-                    Severity.WARNING, self._msg("repeater_offline", label=name), actor="supervision"
+                    Severity.WARNING, self._msg("repeater_offline", label=name),
+                    actor="supervision", category="technical",
                 )
         # Mesh routers: fall back to a last_seen heuristic (display only, no SMS)
         # ONLY for repeaters we get no Z2M availability signal for. When
@@ -351,7 +352,11 @@ class StateMachine:
                 det.alarm_unconfirmed = False
                 await self._handle_alarm(det)
         elif det.battery is not None and det.battery <= 10:
-            await self._raise(Severity.WARNING, self._msg("detector_low_battery", label=det.label, battery=det.battery), actor="supervision")
+            await self._raise(
+                Severity.WARNING,
+                self._msg("detector_low_battery", label=det.label, battery=det.battery),
+                actor="supervision", category="technical",
+            )
         if payload.get(alarm_prop) is False:
             det.alarm_unconfirmed = False  # device (or cache) now reports clear
 
@@ -446,7 +451,8 @@ class StateMachine:
         elif online and not prev_online and friendly_name in self._mesh_down:
             self._mesh_down.discard(friendly_name)
             await self._raise(
-                Severity.INFO, self._msg("repeater_online", label=friendly_name), actor="supervision"
+                Severity.INFO, self._msg("repeater_online", label=friendly_name),
+                actor="supervision", category="technical",
             )
         await self._publish()
 
@@ -466,7 +472,7 @@ class StateMachine:
         await self._raise(
             Severity.CRITICAL,
             self._msg("alarm", label=det.label, kind=det.kind, zone=det.zone, temperature=det.temperature),
-            actor="detector",
+            actor="detector", category="fire",
         )
         await self._sound_interconnect(origin=det)
 
@@ -541,7 +547,7 @@ class StateMachine:
                 Severity.WARNING,
                 self._msg("ups_on_battery", charge=ups.charge_pct, runtime_min=runtime_min,
                           grid_voltage=ups.grid_voltage, load=ups.load_pct),
-                actor="ups",
+                actor="ups", category="power",
             )
         # Mains restored: arm on the recovery transition (prev_monitored guards the
         # cold start), but DON'T announce until the UPS reports a real mains voltage.
@@ -554,13 +560,13 @@ class StateMachine:
             await self._raise(
                 Severity.INFO,
                 self._msg("ups_restored", grid_voltage=round(ups.grid_voltage)),
-                actor="ups",
+                actor="ups", category="power",
             )
         if ups.low_battery and not prev_low:
             await self._raise(
                 Severity.CRITICAL,
                 self._msg("ups_low_battery", charge=ups.charge_pct, runtime_min=runtime_min),
-                actor="ups",
+                actor="ups", category="power",
             )
         await self._publish()
 
@@ -588,7 +594,9 @@ class StateMachine:
         ) or "none"
         text = self._msg("wan_changed", active=active_label, summary=summary)
 
-        recips = sorted(self._cfg.recipients, key=lambda r: r.priority)
+        recips = sorted(
+            (r for r in self._cfg.recipients if "technical" in r.categories), key=lambda r: r.priority
+        )
         msisdns = [r.msisdn for r in recips]
         log.warning("WAN path changed (%s -> %s); notifying %d recipient(s)",
                     prev_active, self.wan.active, len(msisdns))
@@ -727,11 +735,17 @@ class StateMachine:
             actor="notify",
         )
 
-    async def _raise(self, severity: Severity, text: str, actor: str) -> None:
+    async def _raise(self, severity: Severity, text: str, actor: str, category: str) -> None:
         alert_key = self._next_alert_key()
-        sorted_recips = sorted(self._cfg.recipients, key=lambda r: r.priority)
+        sorted_recips = sorted(
+            (r for r in self._cfg.recipients if category in r.categories), key=lambda r: r.priority
+        )
         if not sorted_recips:
-            log.error("alert with no recipients configured: %s", text)
+            log.error("%s alert with no recipients subscribed: %s", category, text)
+            await self._db.audit(
+                "sms_unrouted", {"text": text, "category": category},
+                severity=severity.value, actor=actor,
+            )
             return
 
         first_priority = sorted_recips[0].priority

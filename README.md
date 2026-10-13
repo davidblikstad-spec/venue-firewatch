@@ -54,6 +54,10 @@ Zigbee mesh.
   tier is alerted immediately; if no acknowledgment arrives within
   `FW_ESCALATION_TIMEOUT_MINUTES`, the next tier is alerted. Acknowledgment
   via `POST /api/sms/ack` stops escalation.
+- **Per-recipient message categories:** each recipient picks which SMS they
+  get — `fire`, `power` (UPS) and/or `technical` (devices offline, low
+  battery, internet failover). Defaults to all three; set in ⚙ Settings →
+  Alert receivers. Escalation tiers apply within each category.
 - **Dashboard authentication:** optional password protection
   (`FW_AUTH_PASSWORD`). When set, all dashboard and API access requires a
   session token obtained via the login page.

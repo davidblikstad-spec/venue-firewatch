@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -100,10 +100,24 @@ class Settings(BaseSettings):
     heartbeat_interval: int = 300  # seconds between beats
 
 
+# Which SMS a recipient is subscribed to. "fire" = detector alarms (and their
+# escalations); "power" = UPS on battery / low / restored; "technical" = device
+# and repeater offline, low battery, internet path changes.
+ALERT_CATEGORIES = ("fire", "power", "technical")
+
+
 class Recipient(BaseModel):
     name: str
     msisdn: str  # international format, e.g. 4799999999 (no +)
     priority: int = 0  # lower = alerted first; same priority = alerted together
+    # Defaults to everything, so recipients stored before categories existed
+    # keep receiving every alert.
+    categories: list[str] = Field(default_factory=lambda: list(ALERT_CATEGORIES))
+
+    @field_validator("categories")
+    @classmethod
+    def _known_categories(cls, v: list[str]) -> list[str]:
+        return [c for c in ALERT_CATEGORIES if c in v]  # drop unknown, dedupe, stable order
 
 
 class Detector(BaseModel):
