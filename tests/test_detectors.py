@@ -54,6 +54,54 @@ def test_summarize_detects_settable_siren():
     assert s["alarm_properties"] == ["smoke"]  # siren prop never pollutes alarm list
 
 
+def _develco_siren_bridge(devices):
+    from app.mqtt_client import MqttBridge
+    registry = DeviceRegistry()
+    registry.update(json.dumps(devices).encode())
+    bridge = MqttBridge.__new__(MqttBridge)  # no broker: only the mapping is under test
+    bridge._registry = registry
+    sent: list[tuple[str, dict]] = []
+
+    async def fake_publish_set(name, payload):
+        sent.append((name, payload))
+        return True
+
+    bridge.publish_set = fake_publish_set
+    return bridge, sent
+
+
+def test_publish_siren_uses_device_on_off_values():
+    # Regression: Z2M's SMSZB-120 converter treats anything but "OFF" as START,
+    # so a JSON false re-triggered every siren when the operator hit Silence.
+    bridge, sent = _develco_siren_bridge([{
+        "friendly_name": "smoke_x", "type": "EndDevice",
+        "definition": {"vendor": "Develco", "model": "SMSZB-120", "exposes": [
+            {"type": "binary", "name": "smoke", "property": "smoke", "access": 1},
+            {"type": "binary", "name": "alarm", "property": "alarm", "access": 2,
+             "value_on": "START", "value_off": "OFF"},
+        ]},
+    }])
+
+    async def go():
+        await bridge.publish_siren("smoke_x", {"alarm": True, "max_duration": 300})
+        await bridge.publish_siren("smoke_x", {"alarm": False})
+
+    asyncio.run(go())
+    assert sent == [("smoke_x", {"alarm": "START", "max_duration": 300}),
+                    ("smoke_x", {"alarm": "OFF"})]
+
+
+def test_publish_siren_falls_back_for_unknown_device():
+    # Before bridge/devices arrives, `alarm` must still never go out as false.
+    bridge, sent = _develco_siren_bridge([])
+
+    async def go():
+        await bridge.publish_siren("not_yet_known", {"alarm": False})
+
+    asyncio.run(go())
+    assert sent == [("not_yet_known", {"alarm": "OFF"})]
+
+
 def test_summarize_no_siren_when_none_settable():
     s = _summarize_device({
         "friendly_name": "smoke_lobby", "type": "EndDevice",

@@ -34,6 +34,10 @@ _SUPERVISORY_PROPERTIES = ("tamper", "battery_low")
 # Settable exposes that sound a buzzer (interconnect). Develco SMSZB-120 uses
 # "alarm"; many IAS-WD sirens use "warning".
 SIREN_PROPERTIES = ("warning", "alarm", "siren", "squawk")
+# On/off values for siren properties whose device isn't in the registry yet.
+# SMSZB-120's `alarm` is a binary with value_on "START" / value_off "OFF"; Z2M
+# treats anything other than "OFF" — including JSON false — as START.
+_SIREN_VALUE_FALLBACK = {"alarm": ("START", "OFF")}
 _ACCESS_SET = 0b010  # Z2M access bitmask: bit 1 = settable (publishable to /set)
 
 
@@ -97,6 +101,13 @@ def _summarize_device(entry: dict) -> dict | None:
         if n.get("property") and isinstance(n.get("access"), int) and (n["access"] & _ACCESS_SET)
     }
     siren_props = [p for p in SIREN_PROPERTIES if p in settable]
+    # A binary expose's on/off values are device-defined (true/false, "ON"/"OFF",
+    # "START"/"OFF"...). Siren commands must use them, not raw booleans.
+    binary_values = {
+        n["property"]: (n.get("value_on", True), n.get("value_off", False))
+        for n in _all_nodes(definition.get("exposes") or [])
+        if n.get("property") in siren_props and n.get("type") == "binary"
+    }
 
     return {
         "friendly_name": friendly,
@@ -107,6 +118,7 @@ def _summarize_device(entry: dict) -> dict | None:
         "binary_properties": binary_props,
         "alarm_properties": alarm_props,
         "siren_properties": siren_props,
+        "siren_values": binary_values,
         "suggested_alarm_property": suggested,
         "suggested_siren_property": siren_props[0] if siren_props else None,
         "suggested_kind": kind,
@@ -227,6 +239,21 @@ class MqttBridge:
         base = self._s.mqtt_base_topic
         await client.publish(f"{base}/{friendly_name}/set", json.dumps(payload))
         return True
+
+    async def publish_siren(self, friendly_name: str, payload: dict) -> bool:
+        """`publish_set` for siren commands: booleans in `payload` are mapped to
+        the device's own binary on/off values. Sending JSON `false` to a Develco
+        `alarm` *starts* the siren, so this mapping is what makes Silence work."""
+        summary = self._registry.get(friendly_name) or {}
+        values = summary.get("siren_values") or {}
+        mapped = {}
+        for key, value in payload.items():
+            if isinstance(value, bool):
+                on_off = values.get(key) or _SIREN_VALUE_FALLBACK.get(key)
+                if on_off:
+                    value = on_off[0] if value else on_off[1]
+            mapped[key] = value
+        return await self.publish_set(friendly_name, mapped)
 
     async def _handle(self, topic: str, raw: bytes) -> None:
         base = self._s.mqtt_base_topic

@@ -250,7 +250,7 @@ async def lifespan(_: FastAPI):
     machine.add_listener(clients.push)
 
     bridge = MqttBridge(settings, cfg, machine, registry)
-    machine.set_siren(bridge.publish_set)
+    machine.set_siren(bridge.publish_siren)
     tasks = [
         asyncio.create_task(bridge.run(), name="mqtt"),
         asyncio.create_task(run_ups_poller(settings, machine), name="ups"),
