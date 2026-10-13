@@ -80,7 +80,7 @@ function render() {
     $("bannerLine").textContent =
       `Venue-wide sirens sounding — tripped by ${state.sirens_origin || "a detector"}, which has since cleared`;
   } else if (state.mode === "event") {
-    $("bannerLine").textContent = "SMS alerts on — venue-wide sirens off; only the tripped detector sounds";
+    $("bannerLine").textContent = "Sirenelink avslått · SMS sendes fortsatt; bare detektoren som løser ut piper";
   } else {
     $("bannerLine").textContent = "Detection live — alerts will be sent";
   }
