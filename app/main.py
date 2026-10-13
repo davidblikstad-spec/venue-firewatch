@@ -279,6 +279,35 @@ app = FastAPI(title="Venue FireWatch", version="0.2.0", lifespan=lifespan)
 # inbound webhooks (GatewayAPI delivery receipts and recipient SMS acks).
 _OPEN_PATHS = {"/api/login", "/api/setup", "/login", "/api/sms/dlr", "/api/sms/ack"}
 
+# The wall panel (alarm-panel service on this box) holds a static key instead
+# of a session, and that key opens only these: read state, EVENT on/off, and
+# Silence. It lives in a file next to the DB, readable only by the service user,
+# which the panel service (same user) reads; created on first start.
+_PANEL_ROUTES = {
+    ("GET", "/api/state"),
+    ("POST", "/api/event/arm"),
+    ("POST", "/api/event/end"),
+    ("POST", "/api/siren/silence"),
+}
+
+
+def _load_panel_key() -> str:
+    path = Path(settings.db_path).parent / "panel.token"
+    try:
+        key = path.read_text().strip()
+    except FileNotFoundError:
+        key = ""
+    if not key:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        key = secrets.token_urlsafe(32)
+        path.touch(mode=0o600)
+        path.write_text(key + "\n")
+        log.info("created panel key at %s", path)
+    return key
+
+
+_panel_key = _load_panel_key()
+
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -299,6 +328,10 @@ async def auth_middleware(request: Request, call_next):
             token = auth_header[7:]
 
     if _verify_token(token):
+        return await call_next(request)
+
+    panel_key = request.headers.get("x-panel-key", "")
+    if panel_key and (request.method, path) in _PANEL_ROUTES and hmac.compare_digest(panel_key, _panel_key):
         return await call_next(request)
 
     if path.startswith("/api/") or path == "/ws":
