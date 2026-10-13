@@ -4,7 +4,7 @@
 Manages three internet uplinks in priority order:
     1. eno1  — wired primary
     2. eth0  — wired secondary (auto-joins when a cable is plugged; dhcpcd)
-    3. TRM240 cellular (Quectel EC21, QMI on /dev/cdc-wdm0) — last resort
+    3. TRM240 cellular (Quectel EC21, QMI on its /dev/cdc-wdmN) — last resort
 
 What it does each cycle (~every 30s):
   * Ensures the cellular data session is up (QMI) and has an IP/route.
@@ -31,7 +31,7 @@ import socket
 import subprocess
 import sys
 
-WDM = "/dev/cdc-wdm0"
+WDM_FALLBACK = "/dev/cdc-wdm0"
 APN = "telia"
 CELL_BACKUP = 4000      # cellular route metric while a wired uplink is healthy
 CELL_PRIMARY = 500      # cellular route metric while failed over (beats wired 1000/2000)
@@ -119,6 +119,19 @@ def active_iface() -> str | None:
 
 # ---- cellular bring-up (QMI) -------------------------------------------------
 
+def wdm_for(iface: str) -> str:
+    """The QMI control device paired with `iface`. The kernel numbers these in
+    probe order, so after a reboot the modem can come up as cdc-wdm1 instead of
+    cdc-wdm0 — resolve it from sysfs rather than hard-coding the name."""
+    try:
+        names = sorted(os.listdir(f"/sys/class/net/{iface}/device/usbmisc"))
+        if names:
+            return f"/dev/{names[0]}"
+    except OSError:
+        pass
+    return WDM_FALLBACK
+
+
 def ensure_cellular(iface: str) -> None:
     raw = f"/sys/class/net/{iface}/qmi/raw_ip"
     try:
@@ -130,11 +143,12 @@ def ensure_cellular(iface: str) -> None:
         pass
     sh("ip", "link", "set", iface, "up")
 
-    status = sh("qmi-network", WDM, "status")
+    wdm = wdm_for(iface)
+    status = sh("qmi-network", wdm, "status")
     if "connected" not in status.lower():
-        sh("qmi-network", WDM, "start", timeout=40)
+        sh("qmi-network", wdm, "start", timeout=40)
 
-    settings = sh("qmicli", "-d", WDM, "--device-open-proxy",
+    settings = sh("qmicli", "-d", wdm, "--device-open-proxy",
                   "--wds-get-current-settings")
     ip = mask = gw = None
     for line in settings.splitlines():
