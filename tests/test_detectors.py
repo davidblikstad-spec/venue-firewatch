@@ -447,6 +447,50 @@ def test_all_clear_reaches_escalated_recipients_and_stops_escalation(tmp_path):
     asyncio.run(go())
 
 
+def test_siren_test_sounds_all_without_sms_or_alarm(tmp_path):
+    machine, texts = _all_clear_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        n = await machine.test_sirens_on(actor="settings")
+        assert n == 2  # both siren-capable detectors
+        snap = machine.snapshot()
+        assert snap.sirens_until is not None and snap.sirens_test
+        assert not any(d.alarm for d in snap.detectors)
+        await machine.silence_interconnect(actor="settings")
+        await machine.tick()
+        assert texts == []  # no FIRE and no ALL CLEAR for a test
+
+    asyncio.run(go())
+
+
+def test_siren_test_works_in_event_mode_and_with_interconnect_off(tmp_path):
+    from datetime import timedelta
+    from app.models import now
+    machine, sent = _siren_machine(tmp_path, interconnect=False)
+
+    async def go():
+        await machine._db.init()
+        await machine.arm_event(now() + timedelta(hours=1), actor="test")
+        assert await machine.test_sirens_on() == 2
+
+    asyncio.run(go())
+
+
+def test_real_trip_during_siren_test_is_not_labelled_a_test(tmp_path):
+    machine, texts = _all_clear_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.test_sirens_on()
+        await machine.on_detector_update("smoke_stage", {"smoke": True}, "smoke")
+        snap = machine.snapshot()
+        assert not snap.sirens_test and snap.sirens_origin == "Stage"
+        assert len(texts) == 1 and "FIRE" in texts[0][1]
+
+    asyncio.run(go())
+
+
 def _iso(seconds_ago: float) -> str:
     from datetime import timedelta
     from app.models import now

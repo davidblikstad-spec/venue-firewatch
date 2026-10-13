@@ -68,12 +68,14 @@ function render() {
   // Banner. On a trip the headline reads FIRE and the sub-line names where.
   // Interconnect sirens outlive the trip (they run on their own timer), so
   // a cleared detector with sirens still going must not read "normal".
-  $("bannerMode").textContent = fires.length ? "FIRE" : sirens ? "SIRENS" : state.mode.toUpperCase();
+  $("bannerMode").textContent = fires.length ? "FIRE" : sirens ? (state.sirens_test ? "SIREN TEST" : "SIRENS") : state.mode.toUpperCase();
   $("bannerSilenceBtn").hidden = !sirens;
   if (fires.length) {
     const f = fires[0];
     const where = f.zone ? `${f.label} — ${f.zone} zone` : f.label;
     $("bannerLine").textContent = fires.length > 1 ? `${where} (+${fires.length - 1} more)` : where;
+  } else if (sirens && state.sirens_test) {
+    $("bannerLine").textContent = "Siren test running — not a fire alarm, no SMS sent";
   } else if (sirens) {
     $("bannerLine").textContent =
       `Venue-wide sirens sounding — tripped by ${state.sirens_origin || "a detector"}, which has since cleared`;

@@ -465,6 +465,22 @@ async def silence_siren(actor: str = "dashboard") -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/siren/test/on")
+async def siren_test_on() -> JSONResponse:
+    """Settings test: sound every siren — no fire alarm, no SMS."""
+    count = await machine.test_sirens_on(actor="settings")
+    if not count:
+        return JSONResponse({"error": "No siren-capable detectors, or MQTT is disconnected."}, status_code=409)
+    return JSONResponse({"ok": True, "sirens": count})
+
+
+@app.post("/api/siren/test/off")
+async def siren_test_off() -> JSONResponse:
+    """Settings test: silence every siren (same as the dashboard Silence)."""
+    count = await machine.silence_interconnect(actor="settings")
+    return JSONResponse({"ok": True, "sirens": count})
+
+
 # ---- DLR webhook (GatewayAPI posts delivery receipts here) ---------------
 
 @app.post("/api/sms/dlr")
@@ -1035,6 +1051,13 @@ async def settings_page():
 <button id="testSend">Send test to all receivers</button></div>
 <p class="msg" id="testMsg"></p>
 </div>
+<div class="card">
+<h2>Test all sirens</h2>
+<p class="status">Sounds every siren-capable detector at once — no fire alarm, no SMS. Sirens stop on their own after 5 minutes. The dashboard shows SIRENS while they sound. Battery detectors can take a few seconds to react. Off re-sends for 30 s to reach them all.</p>
+<div class="row"><button id="sirenOn">All sirens ON</button>
+<button id="sirenOff" type="button">All sirens OFF</button></div>
+<p class="msg" id="sirenMsg"></p>
+</div>
 </section>
 
 <section class="section" id="sec-receivers">
@@ -1214,6 +1237,13 @@ document.getElementById("testSend").onclick=async()=>{const m=document.getElemen
   btn.disabled=false;
   if(r.ok){show(m,true,"Sent to "+d.recipients+" receiver(s) — "+d.sent+" transport send(s) ok.");}
   else{show(m,false,d.error||"Failed to send test.")}};
+document.getElementById("sirenOn").onclick=async()=>{const m=document.getElementById("sirenMsg");
+  if(!confirm("Sound every siren in the venue now?"))return;
+  const r=await fetch("/api/siren/test/on",{method:"POST"});const d=await r.json().catch(()=>({}));
+  if(r.ok){show(m,true,"ON sent to "+d.sirens+" siren(s).");}else{show(m,false,d.error||"Failed.")}};
+document.getElementById("sirenOff").onclick=async()=>{const m=document.getElementById("sirenMsg");
+  const r=await fetch("/api/siren/test/off",{method:"POST"});const d=await r.json().catch(()=>({}));
+  if(r.ok){show(m,true,"OFF sent to "+d.sirens+" siren(s); repeating for 30 s.");}else{show(m,false,d.error||"Failed.")}};
 loadTestPreview();
 buildReceivers();
 buildMessages();

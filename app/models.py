@@ -128,4 +128,5 @@ class SystemSnapshot(BaseModel):
     started_at: datetime | None = None   # when the firewatch process came up
     sirens_until: datetime | None = None  # interconnect sirens self-stop at; None = quiet
     sirens_origin: str | None = None      # label of the detector that tripped them
+    sirens_test: bool = False             # sounding from the Settings siren test
     updated_at: datetime = Field(default_factory=now)

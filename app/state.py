@@ -109,6 +109,7 @@ class StateMachine:
         # dashboard. Z2M's SMSZB-120 converter runs each start for 300 s.
         self.sirens_until: datetime | None = None
         self.sirens_origin: str | None = None
+        self.sirens_test = False  # sounding from the Settings test, not a fire
         self._silence_task: asyncio.Task | None = None
         # The fire alarm in progress, so an all-clear SMS can follow it to the
         # same people: started, label, zone, alert_keys, msisdns, sirens, silenced.
@@ -215,6 +216,7 @@ class StateMachine:
             started_at=self.started_at,
             sirens_until=self.sirens_until if self.sirens_until and self.sirens_until > now() else None,
             sirens_origin=self.sirens_origin,
+            sirens_test=self.sirens_test,
         )
 
     async def _publish(self) -> None:
@@ -507,38 +509,55 @@ class StateMachine:
         """
         if not self._cfg.siren_interconnect or self._siren is None:
             return
+        if await self._sirens_on(origin.label) and self._fire_event is not None:
+            self._fire_event["sirens"] = True
+        await self._db.audit(
+            "siren_interconnect", {"origin": origin.friendly_name}, actor="detector",
+        )
+
+    async def _sirens_on(self, origin_label: str, test: bool = False) -> int:
+        """START every siren-capable detector; returns how many were sent."""
         dur = self._cfg.siren_max_duration_s
-        self._cancel_silence_retries()  # a fresh trip must not be undone by a stale OFF
+        self._cancel_silence_retries()  # a fresh start must not be undone by a stale OFF
+        count = 0
         for d in self._cfg.detectors:
             if d.siren_property is None:
                 continue  # device exposes no settable siren
             payload = {d.siren_property: True, "max_duration": dur}
             if await self._siren(d.friendly_name, payload):
                 self._interconnect_active = True
-        if self._interconnect_active:
+                count += 1
+        if count:
             self.sirens_until = now() + timedelta(seconds=dur)
-            self.sirens_origin = origin.label
-            if self._fire_event is not None:
-                self._fire_event["sirens"] = True
-        await self._db.audit(
-            "siren_interconnect", {"origin": origin.friendly_name}, actor="detector",
-        )
+            self.sirens_origin = origin_label
+            self.sirens_test = test
+        await self._publish()
+        return count
+
+    async def test_sirens_on(self, actor: str = "settings") -> int:
+        """Settings 'test all sirens': sound every siren with no fire alarm and
+        no SMS. Ignores EVENT mode and the interconnect switch — it's explicit."""
+        if self._siren is None:
+            return 0
+        count = await self._sirens_on("Siren test", test=True)
+        await self._db.audit("siren_test", {"action": "on", "sirens": count}, actor=actor)
+        return count
 
     # Seconds after Silence to re-send OFF. Battery detectors are sleepy end
     # devices that only poll their parent every few seconds, so a single OFF
     # can expire in the mesh (ROUTE_ERROR_INDIRECT_TRANSACTION_EXPIRY).
     SILENCE_RETRY_S = (5, 10, 20, 30)
 
-    async def silence_interconnect(self, actor: str = "operator") -> None:
+    async def silence_interconnect(self, actor: str = "operator") -> int:
         """Operator 'all clear' — drop every remote siren before it times out.
 
         Always sends OFF, even if we don't think we sounded anything (e.g. after
         a restart), then repeats it in the background for sleepy devices.
         """
         if self._siren is None:
-            return
+            return 0
         self._cancel_silence_retries()
-        await self._send_siren_off()
+        count = await self._send_siren_off()
         self._interconnect_active = False
         self.sirens_until = None
         self.sirens_origin = None
@@ -549,6 +568,7 @@ class StateMachine:
             # Silence is the operator's "venue confirmed clear": no hold-off.
             self._fire_event["silenced"] = True
             await self._maybe_all_clear(confirmed=True)
+        return count
 
     # Quiet time (no detector in alarm, sirens stopped) before an unconfirmed
     # all-clear goes out, so a detector flapping true/false doesn't trigger it.
@@ -612,10 +632,12 @@ class StateMachine:
             actor=actor,
         )
 
-    async def _send_siren_off(self) -> None:
+    async def _send_siren_off(self) -> int:
+        count = 0
         for d in self._cfg.detectors:
             if d.siren_property is not None:
-                await self._siren(d.friendly_name, {d.siren_property: False})
+                count += bool(await self._siren(d.friendly_name, {d.siren_property: False}))
+        return count
 
     async def _silence_retries(self) -> None:
         elapsed = 0
