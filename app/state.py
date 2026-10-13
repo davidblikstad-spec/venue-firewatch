@@ -44,6 +44,10 @@ _MESH_OFFLINE_HOURS = 2
 # report is published within milliseconds of reception, so this is generous.
 _REPLAY_MAX_AGE_S = 60
 
+# Z2M flaps every repeater offline→online within a second or two while it
+# starts up. Only alert if a repeater is still down after this grace period.
+_REPEATER_OFFLINE_GRACE_S = 120
+
 
 def _parse_last_seen(value) -> datetime | None:
     """Z2M `last_seen`: ISO 8601 (UTC or local offset) or epoch milliseconds."""
@@ -118,6 +122,12 @@ class StateMachine:
         # recovery notice only fires for a repeater we actually reported down).
         self._mesh_avail_seen: set[str] = set()
         self._mesh_down: set[str] = set()
+        # Repeaters seen going offline but not yet alerted (debounce), and when.
+        self._mesh_pending_down: dict[str, datetime] = {}
+        # When we started watching each detector. Supervision measures silence
+        # from here for a detector that hasn't reported since FireWatch started,
+        # so one that went quiet before a restart still gets flagged offline.
+        self._supervise_from: dict[str, datetime] = {name: now() for name in self._detectors}
         self._listeners: list[Listener] = []
 
     # ---- wiring -------------------------------------------------------
@@ -147,6 +157,7 @@ class StateMachine:
                 existing.kind = d.kind
                 rebuilt[d.friendly_name] = existing
             else:
+                self._supervise_from[d.friendly_name] = now()
                 rebuilt[d.friendly_name] = DetectorState(
                     friendly_name=d.friendly_name,
                     label=d.label,
@@ -248,8 +259,9 @@ class StateMachine:
         changed = False
         for det in self._detectors.values():
             cfg = next((d for d in self._cfg.detectors if d.friendly_name == det.friendly_name), None)
-            if cfg and det.last_seen:
-                offline = (now() - det.last_seen) > timedelta(hours=cfg.offline_after_hours)
+            since = det.last_seen or self._supervise_from.get(det.friendly_name)
+            if cfg and since:
+                offline = (now() - since) > timedelta(hours=cfg.offline_after_hours)
                 if offline != (not det.online):
                     det.online = not offline
                     changed = True
@@ -259,6 +271,16 @@ class StateMachine:
                             self._msg("detector_offline", label=det.label, zone=det.zone),
                             actor="supervision",
                         )
+        for name, down_since in list(self._mesh_pending_down.items()):
+            if (now() - down_since).total_seconds() < _REPEATER_OFFLINE_GRACE_S:
+                continue
+            del self._mesh_pending_down[name]
+            dev = self._mesh.get(name)
+            if dev is not None and not dev.online:
+                self._mesh_down.add(name)
+                await self._raise(
+                    Severity.WARNING, self._msg("repeater_offline", label=name), actor="supervision"
+                )
         # Mesh routers: fall back to a last_seen heuristic (display only, no SMS)
         # ONLY for repeaters we get no Z2M availability signal for. When
         # availability is enabled, on_mesh_availability owns the online flag and
@@ -281,9 +303,20 @@ class StateMachine:
         if det is None:
             return  # unknown device; ignore (configure it in config.yaml to track)
 
-        det.last_seen = now()
-        det.online = True
-        self.link.last_message = det.last_seen
+        # Z2M's last_seen is when the device last actually transmitted; a
+        # cached-state replay at Z2M startup carries an old one. Use it so a
+        # replay can't make a silent detector look freshly checked in.
+        reported = _parse_last_seen(payload.get("last_seen"))
+        if reported is not None:
+            reported = min(reported, now())
+            if det.last_seen is None or reported > det.last_seen:
+                det.last_seen = reported
+        else:
+            det.last_seen = now()
+        cfg = next((d for d in self._cfg.detectors if d.friendly_name == friendly_name), None)
+        if cfg is None or now() - det.last_seen <= timedelta(hours=cfg.offline_after_hours):
+            det.online = True  # else leave it to tick() to flag (and alert) offline
+        self.link.last_message = now()
         if "temperature" in payload:
             det.temperature = payload["temperature"]
         if "battery" in payload:
@@ -299,7 +332,6 @@ class StateMachine:
         if det.alarm and not was_alarm:
             # Without last_seen (Z2M option disabled) we can't tell a replay
             # from a detection, so fall through and alarm — fail safe.
-            reported = _parse_last_seen(payload.get("last_seen"))
             age = (now() - reported).total_seconds() if reported else None
             if age is not None and age > _REPLAY_MAX_AGE_S:
                 det.alarm = False
@@ -386,9 +418,10 @@ class StateMachine:
     ) -> None:
         """Authoritative reachability for a mesh repeater, from Z2M availability.
 
-        Sends a WARNING SMS when a repeater goes down and an INFO when it comes
-        back — but never on the first reading (the cold-start baseline), so a
-        FireWatch or Z2M restart doesn't fire a spurious alert.
+        Sends a WARNING SMS when a repeater stays down past a short grace period
+        (see tick) and an INFO when it comes back — but never on the first
+        reading (the cold-start baseline), so a FireWatch or Z2M restart doesn't
+        fire a spurious alert.
         """
         dev = self._mesh.get(friendly_name)
         if dev is None:
@@ -406,10 +439,10 @@ class StateMachine:
             return
 
         if not online and prev_online:
-            self._mesh_down.add(friendly_name)
-            await self._raise(
-                Severity.WARNING, self._msg("repeater_offline", label=friendly_name), actor="supervision"
-            )
+            # Debounced: tick() alerts if it's still down after the grace period.
+            self._mesh_pending_down.setdefault(friendly_name, now())
+        elif online and self._mesh_pending_down.pop(friendly_name, None) is not None:
+            pass  # brief blip (e.g. Z2M restart) — never alerted, nothing to recover
         elif online and not prev_online and friendly_name in self._mesh_down:
             self._mesh_down.discard(friendly_name)
             await self._raise(

@@ -29,6 +29,11 @@ def _machine(tmp_path):
     return machine, sent
 
 
+def _age_pending(machine, name, seconds=600):
+    from datetime import timedelta
+    machine._mesh_pending_down[name] -= timedelta(seconds=seconds)
+
+
 def test_parse_online_both_forms():
     assert _parse_online(b'{"state":"online"}') is True
     assert _parse_online(b'{"state":"offline"}') is False
@@ -45,8 +50,13 @@ def test_offline_then_recovery_sends_sms(tmp_path):
         # First reading is the baseline — never alerts.
         await machine.on_mesh_availability("plug1", True)
         assert sent == []
-        # Going down raises a warning naming the repeater.
+        # Going down raises a warning naming the repeater — once it has stayed
+        # down past the grace period.
         await machine.on_mesh_availability("plug1", False)
+        await machine.tick()
+        assert sent == []
+        _age_pending(machine, "plug1")
+        await machine.tick()
         assert len(sent) == 1 and "plug1" in sent[0]
         assert not machine.snapshot().mesh[0].online
         # Coming back sends exactly one recovery notice.
@@ -93,5 +103,21 @@ def test_availability_ignores_non_router_and_disables_last_seen_heuristic(tmp_pa
         # for this device (availability owns the online flag).
         await bridge._handle("zigbee2mqtt/plug1/availability", b'{"state":"online"}')
         assert "plug1" in machine._mesh_avail_seen
+
+    asyncio.run(go())
+
+
+def test_brief_offline_blip_sends_nothing(tmp_path):
+    # Z2M flaps every repeater offline->online at startup; that must stay silent.
+    machine, sent = _machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_mesh_availability("plug1", True)
+        await machine.on_mesh_availability("plug1", False)
+        await machine.on_mesh_availability("plug1", True)
+        await machine.tick()
+        assert sent == [] and machine._mesh_pending_down == {}
+        assert machine.snapshot().mesh[0].online
 
     asyncio.run(go())

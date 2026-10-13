@@ -290,3 +290,58 @@ def test_alarm_without_last_seen_still_trips(tmp_path):
         assert sent
 
     asyncio.run(go())
+
+
+def _sms_machine(tmp_path):
+    machine, _ = _siren_machine(tmp_path)
+    texts: list[str] = []
+
+    async def fake_broadcast(msisdns, text, policy):
+        texts.append(text)
+        return {}
+
+    machine._notifier.broadcast = fake_broadcast
+    from app.config import Recipient
+    machine.set_recipients([Recipient(name="A", msisdn="4790000000", priority=0)])
+    return machine, texts
+
+
+def test_never_reporting_detector_goes_offline(tmp_path):
+    # A detector silent since before FireWatch started must still be flagged
+    # once offline_after_hours has passed since we began watching it.
+    from datetime import timedelta
+    machine, texts = _sms_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.tick()
+        assert machine._detectors["smoke_foh"].online and texts == []
+        machine._supervise_from["smoke_foh"] -= timedelta(hours=25)
+        await machine.tick()
+        assert machine._detectors["smoke_foh"].online is False
+        assert any("FoH" in t and "offline" in t for t in texts)
+
+    asyncio.run(go())
+
+
+def test_stale_replay_does_not_refresh_last_seen(tmp_path):
+    # A Z2M cache replay carrying a 3-day-old last_seen must not make the
+    # detector look freshly checked in.
+    from datetime import timedelta
+    from app.models import now
+    machine, texts = _sms_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update(
+            "smoke_foh", {"smoke": False, "last_seen": _iso(3 * 86400)}, "smoke")
+        det = machine._detectors["smoke_foh"]
+        assert now() - det.last_seen > timedelta(days=2)
+        await machine.tick()
+        assert det.online is False
+        assert any("FoH" in t and "offline" in t for t in texts)
+        # A fresh report brings it straight back online.
+        await machine.on_detector_update("smoke_foh", {"smoke": False, "last_seen": _iso(0)}, "smoke")
+        assert det.online is True
+
+    asyncio.run(go())
