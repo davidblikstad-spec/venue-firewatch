@@ -126,4 +126,6 @@ class SystemSnapshot(BaseModel):
     link: LinkState = Field(default_factory=LinkState)
     wan: WanState | None = None
     started_at: datetime | None = None   # when the firewatch process came up
+    sirens_until: datetime | None = None  # interconnect sirens self-stop at; None = quiet
+    sirens_origin: str | None = None      # label of the detector that tripped them
     updated_at: datetime = Field(default_factory=now)

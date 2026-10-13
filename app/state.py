@@ -8,6 +8,7 @@ end time and reverts to NORMAL on its own.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
@@ -104,6 +105,11 @@ class StateMachine:
         # main). None until wired; commands are no-ops without it.
         self._siren: Callable[[str, dict], Awaitable[bool]] | None = None
         self._interconnect_active = False  # True once we've sounded remote sirens
+        # When the interconnect sirens self-stop and who tripped them, for the
+        # dashboard. Z2M's SMSZB-120 converter runs each start for 300 s.
+        self.sirens_until: datetime | None = None
+        self.sirens_origin: str | None = None
+        self._silence_task: asyncio.Task | None = None
 
         self._detectors: dict[str, DetectorState] = {
             d.friendly_name: DetectorState(
@@ -203,6 +209,8 @@ class StateMachine:
             link=self.link,
             wan=self.wan,
             started_at=self.started_at,
+            sirens_until=self.sirens_until if self.sirens_until and self.sirens_until > now() else None,
+            sirens_origin=self.sirens_origin,
         )
 
     async def _publish(self) -> None:
@@ -486,25 +494,58 @@ class StateMachine:
         if not self._cfg.siren_interconnect or self._siren is None:
             return
         dur = self._cfg.siren_max_duration_s
+        self._cancel_silence_retries()  # a fresh trip must not be undone by a stale OFF
         for d in self._cfg.detectors:
             if d.siren_property is None:
                 continue  # device exposes no settable siren
             payload = {d.siren_property: True, "max_duration": dur}
             if await self._siren(d.friendly_name, payload):
                 self._interconnect_active = True
+        if self._interconnect_active:
+            self.sirens_until = now() + timedelta(seconds=dur)
+            self.sirens_origin = origin.label
         await self._db.audit(
             "siren_interconnect", {"origin": origin.friendly_name}, actor="detector",
         )
 
+    # Seconds after Silence to re-send OFF. Battery detectors are sleepy end
+    # devices that only poll their parent every few seconds, so a single OFF
+    # can expire in the mesh (ROUTE_ERROR_INDIRECT_TRANSACTION_EXPIRY).
+    SILENCE_RETRY_S = (5, 10, 20, 30)
+
     async def silence_interconnect(self, actor: str = "operator") -> None:
-        """Operator 'all clear' — drop every remote siren before it times out."""
-        if self._siren is None or not self._interconnect_active:
+        """Operator 'all clear' — drop every remote siren before it times out.
+
+        Always sends OFF, even if we don't think we sounded anything (e.g. after
+        a restart), then repeats it in the background for sleepy devices.
+        """
+        if self._siren is None:
             return
+        self._cancel_silence_retries()
+        await self._send_siren_off()
+        self._interconnect_active = False
+        self.sirens_until = None
+        self.sirens_origin = None
+        await self._db.audit("siren_silence", {}, actor=actor)
+        await self._publish()
+        self._silence_task = asyncio.create_task(self._silence_retries())
+
+    async def _send_siren_off(self) -> None:
         for d in self._cfg.detectors:
             if d.siren_property is not None:
                 await self._siren(d.friendly_name, {d.siren_property: False})
-        self._interconnect_active = False
-        await self._db.audit("siren_silence", {}, actor=actor)
+
+    async def _silence_retries(self) -> None:
+        elapsed = 0
+        for at in self.SILENCE_RETRY_S:
+            await asyncio.sleep(at - elapsed)
+            elapsed = at
+            await self._send_siren_off()
+
+    def _cancel_silence_retries(self) -> None:
+        if self._silence_task and not self._silence_task.done():
+            self._silence_task.cancel()
+        self._silence_task = None
 
     # ---- UPS ----------------------------------------------------------
 

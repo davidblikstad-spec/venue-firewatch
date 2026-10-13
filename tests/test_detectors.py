@@ -293,6 +293,66 @@ def test_silence_interconnect_clears_all_sirens(tmp_path):
     asyncio.run(go())
 
 
+def test_interconnect_shows_sirens_in_snapshot_until_silenced(tmp_path):
+    machine, sent = _siren_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        await machine.on_detector_update("smoke_foh", {"smoke": False}, "smoke")
+        # Detector cleared, but the sirens are still sounding — the dashboard
+        # must not read plain "normal".
+        snap = machine.snapshot()
+        assert snap.sirens_until is not None and snap.sirens_origin == "FoH"
+        await machine.silence_interconnect(actor="test")
+        assert machine.snapshot().sirens_until is None
+
+    asyncio.run(go())
+
+
+def test_silence_sends_off_even_without_known_interconnect(tmp_path):
+    # After a restart FireWatch forgets it sounded the sirens; Silence must
+    # still reach them.
+    machine, sent = _siren_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.silence_interconnect(actor="test")
+        assert {n for n, _ in sent} == {"smoke_foh", "smoke_stage"}
+
+    asyncio.run(go())
+
+
+def test_silence_repeats_off_for_sleepy_devices(tmp_path):
+    machine, sent = _siren_machine(tmp_path)
+    machine.SILENCE_RETRY_S = (0.01, 0.02)
+
+    async def go():
+        await machine._db.init()
+        await machine.silence_interconnect(actor="test")
+        await machine._silence_task
+        # Immediate OFF plus two retries, to both sirens.
+        assert len(sent) == 6 and all(p == {"alarm": False} for _, p in sent)
+
+    asyncio.run(go())
+
+
+def test_new_trip_cancels_pending_silence_retries(tmp_path):
+    machine, sent = _siren_machine(tmp_path)
+    machine.SILENCE_RETRY_S = (0.05,)
+
+    async def go():
+        await machine._db.init()
+        await machine.silence_interconnect(actor="test")
+        task = machine._silence_task
+        await machine.on_detector_update("smoke_stage", {"smoke": True}, "smoke")
+        await asyncio.sleep(0.1)
+        assert task.cancelled()
+        assert sent[-1][1]["alarm"] is True  # no stale OFF after the new START
+
+    asyncio.run(go())
+
+
 def _iso(seconds_ago: float) -> str:
     from datetime import timedelta
     from app.models import now

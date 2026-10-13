@@ -56,7 +56,8 @@ function renderLink() {
 function render() {
   if (!state) return;
   const fires = state.detectors.filter((x) => x.alarm);
-  const mode = fires.length ? "alarm" : state.mode;
+  const sirens = sirensSounding();
+  const mode = fires.length || sirens ? "alarm" : state.mode;
   html.dataset.mode = mode;
 
   // Venue name in the header (and page title); falls back to the default sub.
@@ -65,11 +66,17 @@ function render() {
   document.title = venue ? `${venue} — FireWatch` : "Venue FireWatch";
 
   // Banner. On a trip the headline reads FIRE and the sub-line names where.
-  $("bannerMode").textContent = fires.length ? "FIRE" : state.mode.toUpperCase();
+  // Interconnect sirens outlive the trip (they run on their own timer), so
+  // a cleared detector with sirens still going must not read "normal".
+  $("bannerMode").textContent = fires.length ? "FIRE" : sirens ? "SIRENS" : state.mode.toUpperCase();
+  $("bannerSilenceBtn").hidden = !sirens;
   if (fires.length) {
     const f = fires[0];
     const where = f.zone ? `${f.label} — ${f.zone} zone` : f.label;
     $("bannerLine").textContent = fires.length > 1 ? `${where} (+${fires.length - 1} more)` : where;
+  } else if (sirens) {
+    $("bannerLine").textContent =
+      `Venue-wide sirens sounding — tripped by ${state.sirens_origin || "a detector"}, which has since cleared`;
   } else if (state.mode === "event") {
     $("bannerLine").textContent = "SMS alerts on — venue-wide sirens off; only the tripped detector sounds";
   } else {
@@ -330,9 +337,25 @@ async function loadWatchdog() {
   } catch { /* keep the last render */ }
 }
 
+function sirensSounding() {
+  return !!state.sirens_until && new Date(state.sirens_until).getTime() > Date.now();
+}
+
 function renderCountdown() {
   const el = $("countdown");
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+  if (sirensSounding()) {
+    el.hidden = false;
+    const tick = () => {
+      const ms = new Date(state.sirens_until).getTime() - Date.now();
+      if (ms <= 0) { render(); return; }  // timer ran out: drop the SIRENS banner
+      const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
+      el.textContent = `sirens auto-stop in ${m}m ${String(s).padStart(2, "0")}s`;
+    };
+    tick();
+    countdownTimer = setInterval(tick, 1000);
+    return;
+  }
   if (state.mode !== "event" || !state.event_until) { el.hidden = true; return; }
   el.hidden = false;
   const tick = () => {
@@ -407,10 +430,12 @@ $("endBtn").addEventListener("click", async () => {
   await fetch("/api/event/end", { method: "POST" });
 });
 
-$("silenceBtn").addEventListener("click", async () => {
+async function silenceSirens() {
   if (!confirm("Silence all sirens now? Only do this once the venue is confirmed clear.")) return;
   await fetch("/api/siren/silence", { method: "POST" });
-});
+}
+$("silenceBtn").addEventListener("click", silenceSirens);
+$("bannerSilenceBtn").addEventListener("click", silenceSirens);
 
 document.querySelectorAll(".seg-btn").forEach((b) =>
   b.addEventListener("click", async () => {

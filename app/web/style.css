@@ -101,6 +101,7 @@ body {
   margin-top: 14px; font-family: var(--mono); color: var(--muted);
   font-size: .9rem; letter-spacing: .06em;
 }
+.banner .banner-silence { width: auto; margin-top: 16px; font-size: 1.05rem; padding: 12px 20px; }
 html[data-mode="alarm"] .banner-mode { animation: pulse 1.1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .45; } }
 
