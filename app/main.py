@@ -395,7 +395,7 @@ async def login(req: LoginRequest) -> JSONResponse:
     if not _auth_configured():
         return JSONResponse({"error": "setup_required"}, status_code=409)
     if not _check_password(req.password, _auth_pw_hash):
-        return JSONResponse({"error": "wrong password"}, status_code=401)
+        return JSONResponse({"error": "feil passord"}, status_code=401)
     return _login_response({"ok": True})
 
 
@@ -404,9 +404,9 @@ async def setup(req: LoginRequest) -> JSONResponse:
     """First-run: choose the dashboard password. Closed once one exists."""
     global _auth_pw_hash
     if _auth_configured():
-        return JSONResponse({"error": "already configured"}, status_code=409)
+        return JSONResponse({"error": "passord er allerede satt"}, status_code=409)
     if len(req.password) < 8:
-        return JSONResponse({"error": "password must be at least 8 characters"}, status_code=400)
+        return JSONResponse({"error": "passordet må ha minst 8 tegn"}, status_code=400)
     _auth_pw_hash = _hash_password(req.password)
     await db.set(_PW_HASH_KEY, _auth_pw_hash)
     await db.audit("system", {"action": "auth_configured"}, severity="info", actor="setup")
@@ -415,7 +415,7 @@ async def setup(req: LoginRequest) -> JSONResponse:
 
 
 _LOGIN_PAGE = """<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="no"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FireWatch — {title}</title>
 <link rel="stylesheet" href="/style.css">
 <style>
@@ -437,12 +437,12 @@ document.getElementById("f").onsubmit=async e=>{{e.preventDefault();
 const err=document.getElementById("err");err.style.display="none";
 const pw=document.getElementById("pw").value;
 if(SETUP){{const c=document.getElementById("pw2").value;
-  if(pw.length<8){{err.textContent="Password must be at least 8 characters";err.style.display="block";return}}
-  if(pw!==c){{err.textContent="Passwords do not match";err.style.display="block";return}}}}
+  if(pw.length<8){{err.textContent="Passordet må ha minst 8 tegn";err.style.display="block";return}}
+  if(pw!==c){{err.textContent="Passordene er ikke like";err.style.display="block";return}}}}
 const r=await fetch(SETUP?"/api/setup":"/api/login",{{method:"POST",
   headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{password:pw}})}});
 if(r.ok){{location.href="/"}}else{{const b=await r.json().catch(()=>({{}}));
-  err.textContent=b.error||"Wrong password";err.style.display="block"}}}};
+  err.textContent=b.error||"Feil passord";err.style.display="block"}}}};
 </script></body></html>"""
 
 
@@ -450,14 +450,14 @@ if(r.ok){{location.href="/"}}else{{const b=await r.json().catch(()=>({{}}));
 async def login_page():
     if _auth_configured():
         return _LOGIN_PAGE.format(
-            title="Login", hint="Enter the dashboard password.",
-            placeholder="Password", confirm="", button="Log in", setup_flag="false",
+            title="Logg inn", hint="Skriv inn passordet til dashbordet.",
+            placeholder="Passord", confirm="", button="Logg inn", setup_flag="false",
         )
     return _LOGIN_PAGE.format(
-        title="Set up", hint="First run — choose a dashboard password (min 8 characters).",
-        placeholder="New password",
-        confirm='<input type="password" id="pw2" placeholder="Confirm password">',
-        button="Set password", setup_flag="true",
+        title="Oppsett", hint="Første oppstart — velg et passord til dashbordet (minst 8 tegn).",
+        placeholder="Nytt passord",
+        confirm='<input type="password" id="pw2" placeholder="Bekreft passord">',
+        button="Lagre passord", setup_flag="true",
     )
 
 
@@ -503,7 +503,7 @@ async def siren_test_on() -> JSONResponse:
     """Settings test: sound every siren — no fire alarm, no SMS."""
     count = await machine.test_sirens_on(actor="settings")
     if not count:
-        return JSONResponse({"error": "No siren-capable detectors, or MQTT is disconnected."}, status_code=409)
+        return JSONResponse({"error": "Ingen detektorer med sirene, eller MQTT er frakoblet."}, status_code=409)
     return JSONResponse({"ok": True, "sirens": count})
 
 
@@ -609,9 +609,9 @@ async def get_settings_status() -> JSONResponse:
 async def change_password(req: PasswordChangeRequest) -> JSONResponse:
     global _auth_pw_hash
     if not _check_password(req.current, _auth_pw_hash):
-        return JSONResponse({"error": "current password is incorrect"}, status_code=401)
+        return JSONResponse({"error": "nåværende passord er feil"}, status_code=401)
     if len(req.new) < 8:
-        return JSONResponse({"error": "password must be at least 8 characters"}, status_code=400)
+        return JSONResponse({"error": "passordet må ha minst 8 tegn"}, status_code=400)
     _auth_pw_hash = _hash_password(req.new)
     await db.set(_PW_HASH_KEY, _auth_pw_hash)
     await db.audit("system", {"action": "password_changed"}, severity="info", actor="settings")
@@ -723,7 +723,7 @@ async def scan_ups_endpoint(host: str = "localhost") -> JSONResponse:
 async def set_ups(req: UpsSettingsRequest) -> JSONResponse:
     if req.poll_seconds is not None:
         if req.poll_seconds < 5:
-            return JSONResponse({"error": "poll interval must be at least 5 seconds"}, status_code=400)
+            return JSONResponse({"error": "intervallet må være minst 5 sekunder"}, status_code=400)
         settings.ups_poll_seconds = req.poll_seconds
         await db.set(_UPS_POLL_KEY, str(req.poll_seconds))
 
@@ -745,8 +745,8 @@ async def set_ups(req: UpsSettingsRequest) -> JSONResponse:
 # ---- Detectors (dashboard-managed fire/heat alarm config) ----------------
 
 _DETECTORS_PAGE = """<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FireWatch — Detectors</title>
+<html lang="no"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FireWatch — Detektorer</title>
 <link rel="stylesheet" href="/style.css">
 <style>
 .wrap{max-width:920px;margin:5vh auto;padding:0 16px}
@@ -777,23 +777,23 @@ button{cursor:pointer;font-family:inherit}
 .empty{color:var(--muted,#9aa);font-size:.82rem}
 </style></head><body>
 <div class="wrap">
-<a class="back" href="/">← back to dashboard</a>
-<h1>Detectors</h1>
+<a class="back" href="/">← tilbake til dashbordet</a>
+<h1>Detektorer</h1>
 
 <div class="card">
-<h2>Discovered devices</h2>
-<p class="hint">Paired Zigbee devices reported by Zigbee2MQTT. Alarm-capable ones are listed first; “Add” pre-fills a row below.</p>
-<div class="disc" id="disc"><span class="empty">Loading…</span></div>
+<h2>Oppdagede enheter</h2>
+<p class="hint">Parede Zigbee-enheter rapportert av Zigbee2MQTT. Enheter som kan gi alarm står først; «Legg til» fyller ut en rad nedenfor.</p>
+<div class="disc" id="disc"><span class="empty">Laster…</span></div>
 </div>
 
 <div class="card">
-<h2>Monitored detectors</h2>
-<p class="hint">Each <code>friendly_name</code> must match Zigbee2MQTT exactly. <code>alarm_property</code> is the boolean field that goes true on detection (e.g. “smoke”, “heat”). EVENT mode still sends every SMS but holds the venue-wide siren interconnect.</p>
+<h2>Overvåkede detektorer</h2>
+<p class="hint">Hvert <code>friendly_name</code> må stemme nøyaktig med Zigbee2MQTT. <code>alarm_property</code> er feltet som blir sant ved deteksjon (f.eks. «smoke», «heat»). I eventmodus sendes SMS fortsatt, men sirenelinken er avslått.</p>
 <table><thead><tr>
-<th>Label</th><th>Friendly name</th><th>Kind</th><th>Alarm prop</th><th title="Settable property that sounds this device's buzzer for interconnect (e.g. &quot;alarm&quot;). Leave blank if it has no remote siren.">Siren prop</th><th>Zone</th><th title="Hours without a check-in before it is treated as a fault">Offline h</th><th></th>
+<th>Navn</th><th>Friendly name</th><th>Type</th><th>Alarmfelt</th><th title="Felt som starter enhetens sirene ved sirenelink (f.eks. &quot;alarm&quot;). La stå tomt hvis den ikke har fjernstyrt sirene.">Sirenefelt</th><th>Sone</th><th title="Timer uten innsjekk før den regnes som frakoblet">Frakoblet etter t</th><th></th>
 </tr></thead><tbody id="rows"></tbody></table>
-<button class="addbtn" id="addBtn">+ Add detector</button>
-<div><button class="savebtn" id="saveBtn">Save detectors</button></div>
+<button class="addbtn" id="addBtn">+ Legg til detektor</button>
+<div><button class="savebtn" id="saveBtn">Lagre detektorer</button></div>
 <p class="msg" id="msg"></p>
 </div>
 </div>
@@ -814,15 +814,15 @@ function sel(opts,value){const s=document.createElement("select");const seen=new
     const el=document.createElement("option");el.value=o.v;el.textContent=o.t;
     if(o.v===(value??""))el.selected=true;s.appendChild(el)}
   if(value&&!seen.has(value)){const el=document.createElement("option");
-    el.value=value;el.textContent=value+" (saved)";el.selected=true;s.appendChild(el)}
+    el.value=value;el.textContent=value+" (lagret)";el.selected=true;s.appendChild(el)}
   return s}
 function alarmOpts(fn){const dev=devMap[fn];
   const props=(dev&&dev.alarm_properties&&dev.alarm_properties.length)?dev.alarm_properties:ALARM_FALLBACK;
   return props.map(p=>({v:p,t:p}))}
 function sirenOpts(fn){const dev=devMap[fn];const props=(dev&&dev.siren_properties)||[];
-  return [{v:"",t:"\\u2014 no siren \\u2014"}].concat(props.map(p=>({v:p,t:p})))}
+  return [{v:"",t:"\\u2014 ingen sirene \\u2014"}].concat(props.map(p=>({v:p,t:p})))}
 function addRow(d){d=d||{};const tr=document.createElement("tr");
-  const label=inp(d.label,"Stage left"),fn=inp(d.friendly_name,"heat_stage_left");fn.setAttribute("list","devNames");
+  const label=inp(d.label,"Scene venstre"),fn=inp(d.friendly_name,"heat_stage_left");fn.setAttribute("list","devNames");
   const kind=document.createElement("select");for(const k of KINDS){const o=document.createElement("option");o.value=o.textContent=k;if((d.kind||"heat")===k)o.selected=true;kind.appendChild(o)}
   let prop=sel(alarmOpts(fn.value),d.alarm_property||""),siren=sel(sirenOpts(fn.value),d.siren_property||"");
   const propCell=cell("",prop),sirenCell=cell("",siren);
@@ -832,7 +832,7 @@ function addRow(d){d=d||{};const tr=document.createElement("tr");
   const zone=inp(d.zone||"default");
   const off=inp(d.offline_after_hours??6);off.type="number";off.step="0.5";off.min="0";
   tr.append(cell("",label),cell("",fn),cell("",kind),propCell,sirenCell,cell("",zone),cell("num",off));
-  const del=document.createElement("button");del.className="iconbtn";del.textContent="\\u2715";del.title="Remove";del.onclick=()=>tr.remove();
+  const del=document.createElement("button");del.className="iconbtn";del.textContent="\\u2715";del.title="Fjern";del.onclick=()=>tr.remove();
   tr.append(cell("",del));
   tr._get=()=>({label:label.value.trim(),friendly_name:fn.value.trim(),kind:kind.value,
     alarm_property:prop.value.trim(),siren_property:siren.value.trim()||null,
@@ -844,8 +844,8 @@ document.getElementById("addBtn").onclick=()=>addRow();
 document.getElementById("saveBtn").onclick=async()=>{
   const data=[...rows.children].map(tr=>tr._get());
   const r=await fetch("/api/detectors",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
-  if(r.ok){show(true,"Saved "+data.length+" detector(s). Now monitored live — no restart needed.");loadDevices()}
-  else{const b=await r.json().catch(()=>({}));show(false,b.error||"Failed to save")}};
+  if(r.ok){show(true,"Lagret "+data.length+" detektor(er). Overvåkes nå — ingen omstart nødvendig.");loadDevices()}
+  else{const b=await r.json().catch(()=>({}));show(false,b.error||"Kunne ikke lagre")}};
 async function loadDetectors(){const r=await fetch("/api/detectors");const d=await r.json();
   rows.innerHTML="";(d.length?d:[{}]).forEach(addRow)}
 function configuredNames(){return new Set([...rows.children].map(tr=>tr._get().friendly_name))}
@@ -854,22 +854,22 @@ async function loadDevices(){const el=document.getElementById("disc");
   devMap={};for(const dev of d.devices)devMap[dev.friendly_name]=dev;
   document.getElementById("devNames").innerHTML="";
   for(const dev of d.devices){const o=document.createElement("option");o.value=dev.friendly_name;document.getElementById("devNames").appendChild(o)}
-  if(!d.devices.length){el.innerHTML='<span class="empty">No devices reported yet — Z2M must be running and publishing bridge/devices.</span>';return}
+  if(!d.devices.length){el.innerHTML='<span class="empty">Ingen enheter rapportert ennå — Z2M må kjøre og publisere bridge/devices.</span>';return}
   const have=configuredNames();el.innerHTML="";
   for(const dev of d.devices){const box=document.createElement("div");box.className="dev";
     const left=document.createElement("div");
     const nm=document.createElement("div");nm.className="nm";nm.textContent=dev.friendly_name;
     const meta=document.createElement("div");meta.className="meta";
-    meta.textContent=[dev.vendor,dev.model].filter(Boolean).join(" ")||"unknown";
+    meta.textContent=[dev.vendor,dev.model].filter(Boolean).join(" ")||"ukjent";
     left.append(nm,meta);
     if(dev.is_alarm_device){const t=document.createElement("div");t.className="tag";t.textContent=dev.alarm_properties.join(" / ");left.append(t)}
     if(dev.siren_properties&&dev.siren_properties.length){const t=document.createElement("div");t.className="tag";t.textContent="\\ud83d\\udd14 "+dev.siren_properties.join(" / ");left.append(t)}
     box.append(left);
     const btn=document.createElement("button");
-    if(have.has(dev.friendly_name)||dev.configured){btn.textContent="added";btn.disabled=true}
-    else{btn.textContent="Add";btn.onclick=()=>{addRow({friendly_name:dev.friendly_name,
+    if(have.has(dev.friendly_name)||dev.configured){btn.textContent="lagt til";btn.disabled=true}
+    else{btn.textContent="Legg til";btn.onclick=()=>{addRow({friendly_name:dev.friendly_name,
       label:dev.description||dev.friendly_name,kind:dev.suggested_kind||"heat",
-      alarm_property:dev.suggested_alarm_property||"",siren_property:dev.suggested_siren_property||""});btn.textContent="added";btn.disabled=true}}
+      alarm_property:dev.suggested_alarm_property||"",siren_property:dev.suggested_siren_property||""});btn.textContent="lagt til";btn.disabled=true}}
     box.append(btn);el.append(box)}}
 // Devices first so detector rows build their dropdowns from live exposes; then
 // a second pass marks already-configured devices as "added".
@@ -887,11 +887,11 @@ async def put_detectors(detectors: list[Detector]) -> JSONResponse:
     """Replace the full detector set. The dashboard saves the whole table."""
     names = [d.friendly_name.strip() for d in detectors]
     if any(not n for n in names):
-        return JSONResponse({"error": "every detector needs a friendly_name"}, status_code=400)
+        return JSONResponse({"error": "hver detektor må ha et friendly_name"}, status_code=400)
     if len(set(names)) != len(names):
-        return JSONResponse({"error": "duplicate friendly_name"}, status_code=400)
+        return JSONResponse({"error": "samme friendly_name er brukt to ganger"}, status_code=400)
     if any(not d.alarm_property.strip() for d in detectors):
-        return JSONResponse({"error": "every detector needs an alarm_property"}, status_code=400)
+        return JSONResponse({"error": "hver detektor må ha et alarmfelt"}, status_code=400)
 
     await db.set(_DETECTORS_KEY, json.dumps([d.model_dump() for d in detectors]))
     await machine.set_detectors(detectors)
@@ -915,7 +915,7 @@ async def put_recipients(recipients: list[Recipient]) -> JSONResponse:
     """Replace the full recipient list. The dashboard saves the whole table."""
     for r in recipients:
         if not r.name.strip():
-            return JSONResponse({"error": "every recipient needs a name"}, status_code=400)
+            return JSONResponse({"error": "hver mottaker må ha et navn"}, status_code=400)
         # Be lenient on input: strip spaces, dashes, parens and a leading '+'.
         digits = "".join(ch for ch in r.msisdn if ch.isdigit())
         if not (6 <= len(digits) <= 15):
@@ -925,12 +925,12 @@ async def put_recipients(recipients: list[Recipient]) -> JSONResponse:
             )
         r.msisdn = digits
     if len({r.msisdn for r in recipients}) != len(recipients):
-        return JSONResponse({"error": "duplicate phone number"}, status_code=400)
+        return JSONResponse({"error": "samme telefonnummer er brukt to ganger"}, status_code=400)
     for r in recipients:
         if not r.categories:
             return JSONResponse({"error": f"{r.name} isn't set to receive any messages"}, status_code=400)
     if recipients and not any("fire" in r.categories for r in recipients):
-        return JSONResponse({"error": "at least one receiver must get fire alarms"}, status_code=400)
+        return JSONResponse({"error": "minst én mottaker må få brannvarsler"}, status_code=400)
 
     await db.set(_RECIPIENTS_KEY, json.dumps([r.model_dump() for r in recipients]))
     machine.set_recipients(recipients)
@@ -979,8 +979,8 @@ async def detectors_page():
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page():
     return """<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FireWatch — Settings</title>
+<html lang="no"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FireWatch — Innstillinger</title>
 <link rel="stylesheet" href="/style.css">
 <style>
 .layout{max-width:900px;margin:5vh auto;padding:0 16px;display:flex;gap:24px;align-items:flex-start}
@@ -1023,13 +1023,13 @@ async def settings_page():
 </style></head><body>
 <div class="layout">
 <nav class="sidenav">
-<h1>Settings</h1>
-<a class="back" href="/">← back to dashboard</a>
-<button class="nav active" data-sec="general">Venue</button>
-<button class="nav" data-sec="security">Security</button>
+<h1>Innstillinger</h1>
+<a class="back" href="/">← tilbake til dashbordet</a>
+<button class="nav active" data-sec="general">Lokale</button>
+<button class="nav" data-sec="security">Sikkerhet</button>
 <button class="nav" data-sec="sms">SMS / GatewayAPI</button>
-<button class="nav" data-sec="receivers">Receivers</button>
-<button class="nav" data-sec="messages">Messages</button>
+<button class="nav" data-sec="receivers">Mottakere</button>
+<button class="nav" data-sec="messages">Meldinger</button>
 <button class="nav" data-sec="ups">UPS</button>
 <button class="nav" data-sec="watchdog">Watchdog</button>
 </nav>
@@ -1037,21 +1037,21 @@ async def settings_page():
 
 <section class="section active" id="sec-general">
 <div class="card">
-<h2>Venue name</h2>
-<p class="status">Shown in the dashboard header and prefixed to every SMS alert, so recipients know which site an alert is from. Leave blank to use “FireWatch”.</p>
-<label for="venue">Venue name</label><input type="text" id="venue" maxlength="40" placeholder="e.g. Tivoli Hall">
-<button id="venueBtn">Save venue</button>
+<h2>Navn på lokalet</h2>
+<p class="status">Vises øverst i dashbordet og foran hver SMS, så mottakerne vet hvilket sted varselet gjelder. La stå tomt for å bruke «FireWatch».</p>
+<label for="venue">Navn på lokalet</label><input type="text" id="venue" maxlength="40" placeholder="f.eks. Tollboden">
+<button id="venueBtn">Lagre navn</button>
 <p class="msg" id="venueMsg"></p>
 </div>
 </section>
 
 <section class="section" id="sec-security">
 <div class="card">
-<h2>Dashboard password</h2>
-<label for="cur">Current password</label><input type="password" id="cur">
-<label for="np">New password</label><input type="password" id="np">
-<label for="np2">Confirm new password</label><input type="password" id="np2">
-<button id="pwBtn">Update password</button>
+<h2>Passord til dashbordet</h2>
+<label for="cur">Nåværende passord</label><input type="password" id="cur">
+<label for="np">Nytt passord</label><input type="password" id="np">
+<label for="np2">Bekreft nytt passord</label><input type="password" id="np2">
+<button id="pwBtn">Oppdater passord</button>
 <p class="msg" id="pwMsg"></p>
 </div>
 </section>
@@ -1059,48 +1059,48 @@ async def settings_page():
 <section class="section" id="sec-sms">
 <div class="card">
 <h2>GatewayAPI (SMS)</h2>
-<p class="status" id="gwStatus">Loading…</p>
-<label for="tok">API token</label><input type="password" id="tok" placeholder="paste token, or leave blank to clear">
-<button id="gwBtn">Save token</button>
+<p class="status" id="gwStatus">Laster…</p>
+<label for="tok">API-token</label><input type="password" id="tok" placeholder="lim inn token, eller la stå tomt for å fjerne">
+<button id="gwBtn">Lagre token</button>
 <p class="msg" id="gwMsg"></p>
 </div>
 <div class="card">
-<h2>Send policy</h2>
-<p class="status">How alerts are delivered across the two SMS transports.</p>
-<label for="policy">Policy</label>
+<h2>Sendemåte</h2>
+<p class="status">Hvordan varsler sendes over de to SMS-kanalene.</p>
+<label for="policy">Sendemåte</label>
 <select id="policy">
-<option value="failover">Failover — GatewayAPI first, TRM240 modem only if it fails</option>
-<option value="both">Both — send via GatewayAPI and the TRM240 modem at once</option>
+<option value="failover">Reserve — GatewayAPI først, TRM240-modemet bare hvis det feiler</option>
+<option value="both">Begge — send via GatewayAPI og TRM240-modemet samtidig</option>
 </select>
 <p class="ph" id="policyHelp"></p>
-<button id="policyBtn">Save policy</button>
+<button id="policyBtn">Lagre sendemåte</button>
 <p class="msg" id="policyMsg"></p>
 </div>
 <div class="card">
-<h2>Test message</h2>
-<p class="status">Sends a live status summary to every receiver via the current policy — a full end-to-end delivery check. Not an alarm.</p>
-<pre class="preview" id="testPreview">Loading preview…</pre>
-<div class="row"><button id="testRefresh" type="button">Refresh preview</button>
-<button id="testSend">Send test to all receivers</button></div>
+<h2>Testmelding</h2>
+<p class="status">Sender en statusoppsummering til alle mottakere med valgt sendemåte — en full test av leveringen. Ikke en alarm.</p>
+<pre class="preview" id="testPreview">Laster forhåndsvisning…</pre>
+<div class="row"><button id="testRefresh" type="button">Oppdater forhåndsvisning</button>
+<button id="testSend">Send test til alle mottakere</button></div>
 <p class="msg" id="testMsg"></p>
 </div>
 <div class="card">
-<h2>Test all sirens</h2>
-<p class="status">Sounds every siren-capable detector at once — no fire alarm, no SMS. Sirens stop on their own after 5 minutes. The dashboard shows SIRENS while they sound. Battery detectors can take a few seconds to react. Off re-sends for 30 s to reach them all.</p>
-<div class="row"><button id="sirenOn">All sirens ON</button>
-<button id="sirenOff" type="button">All sirens OFF</button></div>
+<h2>Test alle brannsirener</h2>
+<p class="status">Starter sirenen på alle detektorer som har en — ingen brannalarm, ingen SMS. Sirenene stopper av seg selv etter 5 minutter. Dashbordet viser SIRENETEST mens de piper. Batteridetektorer kan bruke noen sekunder på å reagere. AV sendes på nytt i 30 s så alle får det med seg.</p>
+<div class="row"><button id="sirenOn">Alle sirener PÅ</button>
+<button id="sirenOff" type="button">Alle sirener AV</button></div>
 <p class="msg" id="sirenMsg"></p>
 </div>
 </section>
 
 <section class="section" id="sec-receivers">
 <div class="card">
-<h2>Alert receivers</h2>
-<p class="status">Phone numbers that receive SMS alerts. International digits only, no '+' (e.g. 4799999999). Priority: lower numbers are alerted first; same priority alerts together; higher tiers are escalated to if an alert goes unacknowledged.</p>
-<p class="status">Choose which messages each receiver gets. <b>Fire</b>: smoke/heat alarms. <b>Power</b>: UPS on battery, battery low, mains restored. <b>Technical</b>: detectors or repeaters offline, low detector battery, internet switching to/from cellular. Escalation by priority happens among the receivers of that message type.</p>
-<div id="recList" style="margin-top:14px"><p class="status">Loading…</p></div>
-<div class="row"><button id="recAddBtn" type="button">+ Add receiver</button></div>
-<button id="recBtn">Save receivers</button>
+<h2>Mottakere av varsler</h2>
+<p class="status">Telefonnumre som får SMS-varsler. Bare sifre med landskode, uten «+» (f.eks. 4799999999). Prioritet: lavest nummer varsles først; lik prioritet varsles samtidig; neste nivå varsles hvis ingen bekrefter varselet.</p>
+<p class="status">Velg hvilke meldinger hver mottaker får. <b>Brann</b>: røyk-/varmealarmer. <b>Strøm</b>: UPS på batteri, lavt batteri, strømmen tilbake. <b>Teknisk</b>: detektorer eller repeatere frakoblet, lavt batteri i detektor, internett over til/fra mobilnett. Eskalering etter prioritet skjer blant mottakerne av den meldingstypen.</p>
+<div id="recList" style="margin-top:14px"><p class="status">Laster…</p></div>
+<div class="row"><button id="recAddBtn" type="button">+ Legg til mottaker</button></div>
+<button id="recBtn">Lagre mottakere</button>
 <p class="msg" id="recMsg"></p>
 </div>
 </section>
@@ -1108,33 +1108,33 @@ async def settings_page():
 <section class="section" id="sec-ups">
 <div class="card">
 <h2>UPS (NUT)</h2>
-<p class="status" id="upsStatus">Loading…</p>
-<label for="upsName">UPS name</label><input type="text" id="upsName" placeholder="e.g. myups@localhost — blank to disable">
-<div class="row"><button id="upsScanBtn" type="button">Scan for UPSes</button>
-<select id="upsFound"><option value="">— scan to choose —</option></select></div>
+<p class="status" id="upsStatus">Laster…</p>
+<label for="upsName">UPS-navn</label><input type="text" id="upsName" placeholder="f.eks. myups@localhost — tomt for å slå av">
+<div class="row"><button id="upsScanBtn" type="button">Søk etter UPS</button>
+<select id="upsFound"><option value="">— søk for å velge —</option></select></div>
 <p class="msg" id="upsScanMsg"></p>
-<label for="upsPoll">Poll interval (seconds)</label><input type="number" id="upsPoll" min="5" step="5">
-<button id="upsBtn">Save UPS</button>
+<label for="upsPoll">Sjekk hvert (sekunder)</label><input type="number" id="upsPoll" min="5" step="5">
+<button id="upsBtn">Lagre UPS</button>
 <p class="msg" id="upsMsg"></p>
 </div>
 </section>
 
 <section class="section" id="sec-watchdog">
 <div class="card">
-<h2>Off-site watchdog</h2>
-<p class="status" id="hbStatus">Loading…</p>
-<label for="hbtok">Heartbeat token</label><input type="password" id="hbtok" placeholder="paste the watchdog secret, or leave blank to clear">
-<button id="hbBtn">Save token</button>
+<h2>Ekstern watchdog</h2>
+<p class="status" id="hbStatus">Laster…</p>
+<label for="hbtok">Hjerteslag-token</label><input type="password" id="hbtok" placeholder="lim inn watchdog-hemmeligheten, eller la stå tomt for å fjerne">
+<button id="hbBtn">Lagre token</button>
 <p class="msg" id="hbStatusMsg"></p>
 </div>
 </section>
 
 <section class="section" id="sec-messages">
 <div class="card">
-<h2>Alert SMS messages</h2>
-<p class="status">The text sent for each scenario. Use the listed {placeholders} — they are filled in when the alert fires. Blank or unchanged means the built-in default is used. Every message is automatically prefixed with the venue name (Venue tab) — don't repeat it here.</p>
-<div id="msgList" style="margin-top:14px"><p class="status">Loading…</p></div>
-<button id="msgBtn">Save messages</button>
+<h2>SMS-tekster</h2>
+<p class="status">Teksten som sendes i hver situasjon. Bruk {feltene} som står under — de fylles ut når varselet sendes. Tomt eller uendret betyr at standardteksten brukes. Navnet på lokalet (fanen Lokale) settes automatisk foran hver melding — ikke gjenta det her.</p>
+<div id="msgList" style="margin-top:14px"><p class="status">Laster…</p></div>
+<button id="msgBtn">Lagre tekster</button>
 <p class="msg" id="msgMsg"></p>
 </div>
 </section>
@@ -1152,69 +1152,69 @@ if(location.hash){const b=document.querySelector('.sidenav button[data-sec="'+lo
 async function refresh(){const r=await fetch("/api/settings");const d=await r.json();
   if(document.activeElement!==document.getElementById("venue"))document.getElementById("venue").value=d.venue||"";
   const g=d.gatewayapi;document.getElementById("gwStatus").textContent=
-    (g.configured?("Configured (token "+g.masked+"), sender “"+g.sender+"”"):("Not configured — SMS via GatewayAPI is disabled. Sender “"+g.sender+"”."))
-    +" Endpoint: "+g.base_url+". A token only works against the region it was issued in.";
+    (g.configured?("Satt opp (token "+g.masked+"), avsender «"+g.sender+"»"):("Ikke satt opp — SMS via GatewayAPI er slått av. Avsender «"+g.sender+"»."))
+    +" Endepunkt: "+g.base_url+". Et token virker bare mot regionen det ble laget i.";
   const u=d.ups;const us=document.getElementById("upsStatus");
-  if(!u.name){us.textContent="Not configured — no UPS monitored."}
-  else{us.textContent="Monitoring “"+u.name+"” — "+(u.monitored&&u.online?"reachable"+(u.status?" ("+u.status+")":""):"not reachable yet")+", every "+u.poll_seconds+"s."}
+  if(!u.name){us.textContent="Ikke satt opp — ingen UPS overvåkes."}
+  else{us.textContent="Overvåker «"+u.name+"» — "+(u.monitored&&u.online?"tilgjengelig"+(u.status?" ("+u.status+")":""):"ikke tilgjengelig ennå")+", hvert "+u.poll_seconds+". sekund."}
   if(document.activeElement!==document.getElementById("upsName"))document.getElementById("upsName").value=u.name||"";
   if(document.activeElement!==document.getElementById("upsPoll"))document.getElementById("upsPoll").value=u.poll_seconds;
   const ps=document.getElementById("policy");if(d.sms_policy&&document.activeElement!==ps){ps.value=d.sms_policy;}
   const hb=d.heartbeat;if(hb){document.getElementById("hbStatus").textContent=
-    (hb.enabled?("Enabled — beats to "+hb.url+" every "+hb.interval+"s. "):"Disabled (FW_HEARTBEAT_ENABLED=false). ")+
-    (hb.configured?("Token "+hb.masked+" set."):"No token set — the watchdog will reject beats with 403.");}
+    (hb.enabled?("På — sender til "+hb.url+" hvert "+hb.interval+". sekund. "):"Av (FW_HEARTBEAT_ENABLED=false). ")+
+    (hb.configured?("Token "+hb.masked+" er satt."):"Ingen token — watchdogen vil avvise hjerteslagene med 403.");}
   setPolicyHelp();}
 function setPolicyHelp(){const h=document.getElementById("policyHelp");
   h.textContent=document.getElementById("policy").value==="both"
-    ?"Maximum redundancy: recipients may receive two texts and it uses both GatewayAPI credit and the modem."
-    :"One text normally; the modem is used only if GatewayAPI errors or times out.";}
+    ?"Maksimal sikkerhet: mottakerne kan få to SMS, og både GatewayAPI-kreditt og modemet brukes."
+    :"Normalt én SMS; modemet brukes bare hvis GatewayAPI feiler eller ikke svarer.";}
 document.getElementById("policy").onchange=setPolicyHelp;
 document.getElementById("policyBtn").onclick=async()=>{const m=document.getElementById("policyMsg");
   const policy=document.getElementById("policy").value;
   const r=await fetch("/api/sms/policy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({policy})});
-  if(r.ok){show(m,true,"Policy saved — "+policy+".");refresh();}
-  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+  if(r.ok){show(m,true,"Sendemåte lagret — "+(policy==="both"?"begge":"reserve")+".");refresh();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Feilet")}};
 document.getElementById("venueBtn").onclick=async()=>{const m=document.getElementById("venueMsg");
   const name=document.getElementById("venue").value.trim();
   const r=await fetch("/api/settings/venue",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
-  if(r.ok){show(m,true,name?"Saved — “"+name+"”.":"Cleared — using “FireWatch”.");refresh();}
-  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+  if(r.ok){show(m,true,name?"Lagret — «"+name+"».":"Fjernet — bruker «FireWatch».");refresh();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Feilet")}};
 document.getElementById("pwBtn").onclick=async()=>{const m=document.getElementById("pwMsg");
   const cur=document.getElementById("cur").value,np=document.getElementById("np").value,np2=document.getElementById("np2").value;
-  if(np.length<8){show(m,false,"New password must be at least 8 characters");return}
-  if(np!==np2){show(m,false,"New passwords do not match");return}
+  if(np.length<8){show(m,false,"Det nye passordet må ha minst 8 tegn");return}
+  if(np!==np2){show(m,false,"De nye passordene er ikke like");return}
   const r=await fetch("/api/settings/password",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({current:cur,new:np})});
-  if(r.ok){show(m,true,"Password updated. Other sessions were signed out.");
+  if(r.ok){show(m,true,"Passordet er oppdatert. Andre økter ble logget ut.");
     document.getElementById("cur").value="";document.getElementById("np").value="";document.getElementById("np2").value="";}
-  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Feilet")}};
 document.getElementById("gwBtn").onclick=async()=>{const m=document.getElementById("gwMsg");
   const tok=document.getElementById("tok").value;
   const r=await fetch("/api/settings/gatewayapi",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({token:tok})});
-  if(r.ok){show(m,true,tok.trim()?"Token saved.":"Token cleared.");document.getElementById("tok").value="";refresh();}
-  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+  if(r.ok){show(m,true,tok.trim()?"Token lagret.":"Token fjernet.");document.getElementById("tok").value="";refresh();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Feilet")}};
 document.getElementById("hbBtn").onclick=async()=>{const m=document.getElementById("hbStatusMsg");
   const tok=document.getElementById("hbtok").value;
   const r=await fetch("/api/settings/heartbeat",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({token:tok})});
-  if(r.ok){show(m,true,tok.trim()?"Token saved — applies on the next beat.":"Token cleared.");document.getElementById("hbtok").value="";refresh();}
-  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+  if(r.ok){show(m,true,tok.trim()?"Token lagret — gjelder fra neste hjerteslag.":"Token fjernet.");document.getElementById("hbtok").value="";refresh();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Feilet")}};
 document.getElementById("upsBtn").onclick=async()=>{const m=document.getElementById("upsMsg");
   const name=document.getElementById("upsName").value.trim();
   const poll=parseInt(document.getElementById("upsPoll").value,10);
   const body={ups_name:name};if(!isNaN(poll))body.poll_seconds=poll;
   const r=await fetch("/api/settings/ups",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  if(r.ok){show(m,true,name?"Saved — polling “"+name+"”.":"UPS monitoring disabled.");refresh();}
-  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+  if(r.ok){show(m,true,name?"Lagret — overvåker «"+name+"».":"UPS-overvåking slått av.");refresh();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Feilet")}};
 document.getElementById("upsScanBtn").onclick=async()=>{const m=document.getElementById("upsScanMsg");
-  const sel=document.getElementById("upsFound");show(m,true,"Scanning…");
+  const sel=document.getElementById("upsFound");show(m,true,"Søker…");
   const r=await fetch("/api/ups/scan");const d=await r.json().catch(()=>({}));
-  sel.innerHTML='<option value="">— scan to choose —</option>';
+  sel.innerHTML='<option value="">— søk for å velge —</option>';
   const list=d.ups||[];
   if(list.length){for(const n of list){const o=document.createElement("option");o.value=n;o.textContent=n;sel.appendChild(o)}
-    show(m,true,"Found "+list.length+" UPS"+(list.length>1?"es":"")+" — pick one above.");}
-  else{show(m,false,d.error||"No UPSes found. Is NUT installed and serving one?")}};
+    show(m,true,"Fant "+list.length+" UPS — velg en over.");}
+  else{show(m,false,d.error||"Fant ingen UPS. Er NUT installert og satt opp?")}};
 document.getElementById("upsFound").onchange=(e)=>{if(e.target.value)document.getElementById("upsName").value=e.target.value;};
 let TPL_DEFAULTS={};
 async function buildMessages(){const list=document.getElementById("msgList");
@@ -1222,33 +1222,33 @@ async function buildMessages(){const list=document.getElementById("msgList");
   list.innerHTML="";TPL_DEFAULTS={};
   for(const t of d.templates){TPL_DEFAULTS[t.key]=t.default;
     const wrap=document.createElement("div");wrap.className="tpl";
-    const phs=t.placeholders.length?t.placeholders.map(p=>"{"+p+"}").join(", "):"(no placeholders)";
+    const phs=t.placeholders.length?t.placeholders.map(p=>"{"+p+"}").join(", "):"(ingen felt)";
     const ta=document.createElement("textarea");ta.dataset.key=t.key;ta.value=t.value;
     const h=document.createElement("h3");h.textContent=t.label;
-    if(t.custom){const c=document.createElement("span");c.className="custom";c.textContent=" • customised";h.appendChild(c);}
-    const ph=document.createElement("p");ph.className="ph";ph.textContent="Placeholders: "+phs;
-    const reset=document.createElement("span");reset.className="reset";reset.textContent="reset to default";
+    if(t.custom){const c=document.createElement("span");c.className="custom";c.textContent=" • endret";h.appendChild(c);}
+    const ph=document.createElement("p");ph.className="ph";ph.textContent="Felt: "+phs;
+    const reset=document.createElement("span");reset.className="reset";reset.textContent="tilbake til standard";
     reset.onclick=()=>{ta.value=TPL_DEFAULTS[t.key];};ph.appendChild(reset);
     wrap.appendChild(h);wrap.appendChild(ta);wrap.appendChild(ph);list.appendChild(wrap);}}
 document.getElementById("msgBtn").onclick=async()=>{const m=document.getElementById("msgMsg");
   const templates={};document.querySelectorAll("#msgList textarea").forEach(ta=>{templates[ta.dataset.key]=ta.value;});
   const r=await fetch("/api/settings/templates",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({templates})});
-  if(r.ok){show(m,true,"Messages saved.");buildMessages();}
-  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+  if(r.ok){show(m,true,"Tekstene er lagret.");buildMessages();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Feilet")}};
 function recRow(r){const row=document.createElement("div");row.className="rec";
-  const nm=document.createElement("input");nm.className="nm";nm.placeholder="Name";nm.value=r.name||"";
+  const nm=document.createElement("input");nm.className="nm";nm.placeholder="Navn";nm.value=r.name||"";
   const num=document.createElement("input");num.className="num";num.placeholder="4799999999";num.value=r.msisdn||"";
   const pri=document.createElement("input");pri.className="pri";pri.type="number";pri.min="0";pri.value=(r.priority!=null?r.priority:0);
-  const del=document.createElement("button");del.className="del";del.type="button";del.textContent="✕";del.title="Remove";del.onclick=()=>row.remove();
+  const del=document.createElement("button");del.className="del";del.type="button";del.textContent="✕";del.title="Fjern";del.onclick=()=>row.remove();
   const cats=document.createElement("span");cats.className="cats";const have=r.categories||REC_CATS.map(c=>c[0]);
   REC_CATS.forEach(([k,label])=>{const l=document.createElement("label");l.className="cat";
     const cb=document.createElement("input");cb.type="checkbox";cb.dataset.cat=k;cb.checked=have.includes(k);
     l.append(cb,label);cats.appendChild(l);});
   row.append(nm,num,pri,cats,del);return row;}
-const REC_CATS=[["fire","Fire"],["power","Power"],["technical","Technical"]];
+const REC_CATS=[["fire","Brann"],["power","Strøm"],["technical","Teknisk"]];
 async function buildReceivers(){const list=document.getElementById("recList");
   const r=await fetch("/api/recipients");const d=await r.json().catch(()=>[]);
-  list.innerHTML='<div class="rechead"><span class="nm">Name</span><span class="num">Phone (intl digits)</span><span class="pri">Priority</span><span class="cats">Receives</span><span class="sp"></span></div>';
+  list.innerHTML='<div class="rechead"><span class="nm">Navn</span><span class="num">Telefon (med landskode)</span><span class="pri">Prioritet</span><span class="cats">Får</span><span class="sp"></span></div>';
   (d||[]).forEach(x=>list.appendChild(recRow(x)));
   if(!d||!d.length)list.appendChild(recRow({}));}
 document.getElementById("recAddBtn").onclick=()=>document.getElementById("recList").appendChild(recRow({}));
@@ -1258,25 +1258,25 @@ document.getElementById("recBtn").onclick=async()=>{const m=document.getElementB
     priority:parseInt(row.querySelector(".pri").value,10)||0,
     categories:[...row.querySelectorAll(".cat input:checked")].map(cb=>cb.dataset.cat)})).filter(x=>x.name||x.msisdn);
   const r=await fetch("/api/recipients",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(rows)});
-  if(r.ok){show(m,true,"Saved "+rows.length+" receiver(s).");buildReceivers();}
-  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Failed")}};
+  if(r.ok){show(m,true,"Lagret "+rows.length+" mottaker(e).");buildReceivers();}
+  else{const b=await r.json().catch(()=>({}));show(m,false,b.error||"Feilet")}};
 async function loadTestPreview(){const p=document.getElementById("testPreview");
   const r=await fetch("/api/sms/test");const d=await r.json().catch(()=>({}));
-  p.textContent=d.text||"(preview unavailable)";}
+  p.textContent=d.text||"(forhåndsvisning ikke tilgjengelig)";}
 document.getElementById("testRefresh").onclick=loadTestPreview;
 document.getElementById("testSend").onclick=async()=>{const m=document.getElementById("testMsg");
-  const btn=document.getElementById("testSend");btn.disabled=true;show(m,true,"Sending…");
+  const btn=document.getElementById("testSend");btn.disabled=true;show(m,true,"Sender…");
   const r=await fetch("/api/sms/test",{method:"POST"});const d=await r.json().catch(()=>({}));
   btn.disabled=false;
-  if(r.ok){show(m,true,"Sent to "+d.recipients+" receiver(s) — "+d.sent+" transport send(s) ok.");}
-  else{show(m,false,d.error||"Failed to send test.")}};
+  if(r.ok){show(m,true,"Sendt til "+d.recipients+" mottaker(e) — "+d.sent+" sending(er) ok.");}
+  else{show(m,false,d.error||"Kunne ikke sende testen.")}};
 document.getElementById("sirenOn").onclick=async()=>{const m=document.getElementById("sirenMsg");
-  if(!confirm("Sound every siren in the venue now?"))return;
+  if(!confirm("Starte alle brannsirenene i lokalet nå?"))return;
   const r=await fetch("/api/siren/test/on",{method:"POST"});const d=await r.json().catch(()=>({}));
-  if(r.ok){show(m,true,"ON sent to "+d.sirens+" siren(s).");}else{show(m,false,d.error||"Failed.")}};
+  if(r.ok){show(m,true,"PÅ sendt til "+d.sirens+" sirene(r).");}else{show(m,false,d.error||"Feilet.")}};
 document.getElementById("sirenOff").onclick=async()=>{const m=document.getElementById("sirenMsg");
   const r=await fetch("/api/siren/test/off",{method:"POST"});const d=await r.json().catch(()=>({}));
-  if(r.ok){show(m,true,"OFF sent to "+d.sirens+" siren(s); repeating for 30 s.");}else{show(m,false,d.error||"Failed.")}};
+  if(r.ok){show(m,true,"AV sendt til "+d.sirens+" sirene(r); gjentas i 30 s.");}else{show(m,false,d.error||"Feilet.")}};
 loadTestPreview();
 buildReceivers();
 buildMessages();

@@ -17,57 +17,57 @@ from __future__ import annotations
 # key -> metadata. Order here is the order shown in the Settings UI.
 SMS_TEMPLATES: dict[str, dict] = {
     "alarm": {
-        "label": "Fire alarm triggered",
+        "label": "Brannalarm utløst",
         "placeholders": ["label", "kind", "zone", "temperature"],
         "default": "FIRE ALARM: {label} ({kind}) in {zone}. Temp {temperature}C. Investigate immediately.",
     },
     "all_clear": {
-        "label": "All clear after a fire alarm",
+        "label": "Alt klart etter brannalarm",
         "placeholders": ["label", "zone", "how", "duration"],
         "default": "ALL CLEAR: the fire alarm from {label} in {zone} is over — {how}. Lasted {duration}.",
     },
     "detector_offline": {
-        "label": "Detector offline (no check-in)",
+        "label": "Detektor frakoblet (ingen innsjekk)",
         "placeholders": ["label", "zone"],
         "default": "detector {label} in {zone} went offline (no check-in). Check the device.",
     },
     "detector_low_battery": {
-        "label": "Detector battery low",
+        "label": "Lavt batteri i detektor",
         "placeholders": ["label", "battery"],
         "default": "low battery on detector {label} ({battery}%). Replace the battery soon.",
     },
     "repeater_offline": {
-        "label": "Repeater / plug offline",
+        "label": "Repeater / stikkontakt frakoblet",
         "placeholders": ["label"],
         "default": "repeater {label} went offline. The Zigbee mesh may be weakened — check the device.",
     },
     "repeater_online": {
-        "label": "Repeater / plug back online",
+        "label": "Repeater / stikkontakt tilkoblet igjen",
         "placeholders": ["label"],
         "default": "repeater {label} is back online.",
     },
     "ups_on_battery": {
-        "label": "Mains lost — UPS on backup power",
+        "label": "Strømbrudd — UPS på batteri",
         "placeholders": ["charge", "runtime_min", "grid_voltage", "load"],
         "default": "MAINS POWER LOST. UPS on backup ({charge}% battery, ~{runtime_min} min runtime).",
     },
     "ups_low_battery": {
-        "label": "UPS battery critically low",
+        "label": "UPS-batteriet er kritisk lavt",
         "placeholders": ["charge", "runtime_min"],
         "default": "UPS battery CRITICALLY LOW ({charge}%) — shutdown imminent.",
     },
     "ups_restored": {
-        "label": "Mains power restored",
+        "label": "Strømmen er tilbake",
         "placeholders": ["grid_voltage"],
         "default": "mains power restored ({grid_voltage}V). UPS back on line power.",
     },
     "sms_failover": {
-        "label": "Failover to TRM240 cellular",
+        "label": "Over til TRM240-mobilnett",
         "placeholders": [],
         "default": "primary SMS path (GatewayAPI) is down — now sending via TRM240 cellular network.",
     },
     "wan_changed": {
-        "label": "Internet path changed (WAN failover)",
+        "label": "Internettlinje byttet (WAN-reserve)",
         "placeholders": ["active", "summary"],
         "default": "internet path changed — now using {active}. Links: {summary}",
     },

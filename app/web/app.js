@@ -6,6 +6,9 @@ const html = document.documentElement;
 let state = null;
 let countdownTimer = null;
 
+const MODE_LABELS = { normal: "NORMAL", event: "EVENTMODUS" };
+const KIND_LABELS = { smoke: "røyk", heat: "varme", other: "annet" };
+
 // ---- WebSocket with auto-reconnect ----
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -42,13 +45,13 @@ function renderLink() {
   const l = (state && state.link) || {};
   if (l.mqtt_connected && l.zigbee_online) {
     el.dataset.state = "up"; el.textContent = "zigbee";
-    el.title = "Zigbee2MQTT online — receiving detector data";
+    el.title = "Zigbee2MQTT tilkoblet — mottar data fra detektorene";
   } else if (l.mqtt_connected) {
-    el.dataset.state = "warn"; el.textContent = "mqtt only";
-    el.title = "Connected to the MQTT broker, but Zigbee2MQTT reports offline";
+    el.dataset.state = "warn"; el.textContent = "kun mqtt";
+    el.title = "Koblet til MQTT-brokeren, men Zigbee2MQTT melder frakoblet";
   } else {
-    el.dataset.state = "down"; el.textContent = "no mqtt";
-    el.title = "Not connected to the MQTT broker — no detector data";
+    el.dataset.state = "down"; el.textContent = "ingen mqtt";
+    el.title = "Ikke koblet til MQTT-brokeren — ingen data fra detektorene";
   }
 }
 
@@ -62,34 +65,34 @@ function render() {
 
   // Venue name in the header (and page title); falls back to the default sub.
   const venue = (state.venue || "").trim();
-  $("brandSub").textContent = venue || "secondary monitor";
+  $("brandSub").textContent = venue || "sekundær overvåking";
   document.title = venue ? `${venue} — FireWatch` : "Venue FireWatch";
 
   // Banner. On a trip the headline reads FIRE and the sub-line names where.
   // Interconnect sirens outlive the trip (they run on their own timer), so
   // a cleared detector with sirens still going must not read "normal".
-  $("bannerMode").textContent = fires.length ? "FIRE" : sirens ? (state.sirens_test ? "SIREN TEST" : "SIRENS") : state.mode.toUpperCase();
+  $("bannerMode").textContent = fires.length ? "BRANN" : sirens ? (state.sirens_test ? "SIRENETEST" : "SIRENER") : (MODE_LABELS[state.mode] || state.mode.toUpperCase());
   $("bannerSilenceBtn").hidden = !sirens;
   if (fires.length) {
     const f = fires[0];
-    const where = f.zone ? `${f.label} — ${f.zone} zone` : f.label;
-    $("bannerLine").textContent = fires.length > 1 ? `${where} (+${fires.length - 1} more)` : where;
+    const where = f.zone ? `${f.label} — sone ${f.zone}` : f.label;
+    $("bannerLine").textContent = fires.length > 1 ? `${where} (+${fires.length - 1} til)` : where;
   } else if (sirens && state.sirens_test) {
-    $("bannerLine").textContent = "Siren test running — not a fire alarm, no SMS sent";
+    $("bannerLine").textContent = "Sirenetest pågår — ikke brann, ingen SMS sendt";
   } else if (sirens) {
     $("bannerLine").textContent =
-      `Venue-wide sirens sounding — tripped by ${state.sirens_origin || "a detector"}, which has since cleared`;
+      `Brannsirenene piper i hele bygget — utløst av ${state.sirens_origin || "en detektor"}, som nå er normal igjen`;
   } else if (state.mode === "event") {
     $("bannerLine").textContent = "Sirenelink avslått · SMS sendes fortsatt; bare detektoren som løser ut piper";
   } else {
-    $("bannerLine").textContent = "Detection live — alerts will be sent";
+    $("bannerLine").textContent = "Overvåking aktiv — varsler sendes";
   }
   renderCountdown();
 
   // Detectors
   const list = $("detectors");
   if (!state.detectors.length) {
-    list.innerHTML = '<li class="empty">No detectors configured</li>';
+    list.innerHTML = '<li class="empty">Ingen detektorer satt opp</li>';
   } else {
     list.innerHTML = state.detectors.map(detRow).join("");
   }
@@ -120,20 +123,20 @@ function render() {
   );
   $("policyHint").textContent =
     state.sms_policy === "both"
-      ? "Both channels fire together. Recipients may get two texts."
-      : "GatewayAPI first; the modem takes over only if it fails.";
+      ? "Begge kanalene sender samtidig. Mottakerne kan få to SMS."
+      : "GatewayAPI først; modemet tar over bare hvis det feiler.";
 }
 
 function timeAgo(iso) {
-  if (!iso) return "no data";
+  if (!iso) return "ingen data";
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 5) return "just now";
-  if (s < 60) return `${s}s ago`;
+  if (s < 5) return "akkurat nå";
+  if (s < 60) return `${s} s siden`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) return `${m} min siden`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
+  if (h < 24) return `${h} t siden`;
+  return `${Math.floor(h / 24)} d siden`;
 }
 
 function metric(label, value, cls = "") {
@@ -147,9 +150,9 @@ function fmtUptime(ms) {
   const h = Math.floor(s / 3600); s -= h * 3600;
   const m = Math.floor(s / 60); s -= m * 60;
   const p = (n) => String(n).padStart(2, "0");
-  if (d > 0) return `up ${d}d ${p(h)}h ${p(m)}m`;
-  if (h > 0) return `up ${h}h ${p(m)}m`;
-  return `up ${m}m ${p(s)}s`;
+  if (d > 0) return `oppe ${d}d ${p(h)}t ${p(m)}m`;
+  if (h > 0) return `oppe ${h}t ${p(m)}m`;
+  return `oppe ${m}m ${p(s)}s`;
 }
 
 function tickUptime() {
@@ -166,18 +169,18 @@ function signalCell(lqi) {
   const level = lqi <= 63 ? 1 : lqi <= 127 ? 2 : lqi <= 191 ? 3 : 4;
   const cls = level === 1 ? "m-bad" : level === 2 ? "m-warn" : "";
   const bars = "█".repeat(level) + "░".repeat(4 - level);
-  return `<span class="m ${cls}" title="Zigbee link quality ${esc(lqi)}/255">` +
+  return `<span class="m ${cls}" title="Zigbee-signalkvalitet ${esc(lqi)}/255">` +
     `<span class="ml">signal</span><span class="sig-bars">${bars}</span> ${pct}%</span>`;
 }
 
 function detRow(d) {
   let status = "ok", badge = "OK";
-  if (d.alarm) { status = "alarm"; badge = "ALARM"; }
-  else if (d.alarm_unconfirmed) { status = "fault"; badge = "UNCONFIRMED"; }
-  else if (!d.online) { status = "offline"; badge = "OFFLINE"; }
-  else if (d.fault) { status = "fault"; badge = "FAULT"; }
+  if (d.alarm) { status = "alarm"; badge = "BRANN"; }
+  else if (d.alarm_unconfirmed) { status = "fault"; badge = "UBEKREFTET"; }
+  else if (!d.online) { status = "offline"; badge = "FRAKOBLET"; }
+  else if (d.fault) { status = "fault"; badge = "FEIL"; }
 
-  const sub = [d.kind, d.zone].filter(Boolean).join("  ·  ");
+  const sub = [KIND_LABELS[d.kind] || d.kind, d.zone].filter(Boolean).join("  ·  ");
 
   const battCls = d.battery == null ? ""
     : d.battery <= 10 ? "m-bad"
@@ -185,12 +188,12 @@ function detRow(d) {
 
   const metrics = [
     d.temperature != null ? metric("temp", `${Number(d.temperature).toFixed(1)}°C`) : "",
-    d.battery != null ? metric("batt", `${d.battery}%`, battCls) : "",
+    d.battery != null ? metric("batteri", `${d.battery}%`, battCls) : "",
     d.linkquality != null ? signalCell(d.linkquality) : "",
-    metric("seen", timeAgo(d.last_seen)),
+    metric("sett", timeAgo(d.last_seen)),
   ].filter(Boolean).join("");
 
-  const seenTitle = d.last_seen ? `Last message: ${new Date(d.last_seen).toLocaleString()}` : "No message received yet";
+  const seenTitle = d.last_seen ? `Siste melding: ${new Date(d.last_seen).toLocaleString("no-NO")}` : "Ingen melding mottatt ennå";
   return `<li class="det" data-status="${status}" title="${esc(seenTitle)}">
     <span class="led"></span>
     <div class="det-main">
@@ -211,7 +214,7 @@ function renderMesh() {
   const el = $("mesh");
   const m = (state && state.mesh) || [];
   if (!m.length) {
-    el.innerHTML = '<li class="empty">No mains devices seen yet</li>';
+    el.innerHTML = '<li class="empty">Ingen strømdrevne enheter sett ennå</li>';
     return;
   }
   el.innerHTML = m.map(meshRow).join("");
@@ -222,14 +225,14 @@ function meshRow(d) {
   // awaiting data rather than a misleading online/offline.
   const seen = !!d.last_seen;
   const status = !seen ? "offline" : (d.online ? "ok" : "offline");
-  const badge = !seen ? "…" : (d.online ? (d.state || "OK") : "OFFLINE");
+  const badge = !seen ? "…" : (d.online ? (d.state || "OK") : "FRAKOBLET");
   const sub = [d.vendor, d.model].filter(Boolean).join("  ·  ");
   const metrics = [
-    d.power != null ? metric("load", `${Number(d.power).toFixed(0)} W`) : "",
+    d.power != null ? metric("last", `${Number(d.power).toFixed(0)} W`) : "",
     d.linkquality != null ? signalCell(d.linkquality) : "",
-    metric("seen", timeAgo(d.last_seen)),
+    metric("sett", timeAgo(d.last_seen)),
   ].filter(Boolean).join("");
-  const seenTitle = d.last_seen ? `Last message: ${new Date(d.last_seen).toLocaleString()}` : "No message received yet";
+  const seenTitle = d.last_seen ? `Siste melding: ${new Date(d.last_seen).toLocaleString("no-NO")}` : "Ingen melding mottatt ennå";
   return `<li class="det" data-status="${status}" title="${esc(seenTitle)}">
     <span class="led"></span>
     <div class="det-main">
@@ -246,33 +249,33 @@ function meshRow(d) {
 function renderUps() {
   const el = $("ups");
   const u = state.ups;
-  if (!u || !u.monitored) { el.innerHTML = '<span class="empty">Not monitored — no UPS wired</span>'; return; }
-  const status = u.on_battery ? "ON BATTERY" : (u.online ? "online" : "unreachable");
+  if (!u || !u.monitored) { el.innerHTML = '<span class="empty">Ikke overvåket — ingen UPS tilkoblet</span>'; return; }
+  const status = u.on_battery ? "PÅ BATTERI" : (u.online ? "på nett" : "utilgjengelig");
   const bad = u.on_battery || u.low_battery || !u.online;
   const runtime = u.runtime_s != null
     ? (u.runtime_s >= 60 ? `${Math.round(u.runtime_s / 60)} min` : `${u.runtime_s}s`)
     : null;
   el.innerHTML = `
     <div><span class="k">status </span><span class="${bad ? "ups-bad" : ""}">${status}</span></div>
-    ${u.grid_voltage != null ? `<div><span class="k">grid </span>${u.grid_voltage.toFixed(0)} V</div>` : ""}
-    ${u.load_pct != null ? `<div><span class="k">load </span>${u.load_pct}%</div>` : ""}
-    ${u.charge_pct != null ? `<div><span class="k">charge </span>${u.charge_pct}%</div>` : ""}
-    ${runtime != null ? `<div><span class="k">runtime </span>${runtime}</div>` : ""}
-    ${u.low_battery ? '<div class="ups-bad">LOW BATTERY</div>' : ""}`;
+    ${u.grid_voltage != null ? `<div><span class="k">nett </span>${u.grid_voltage.toFixed(0)} V</div>` : ""}
+    ${u.load_pct != null ? `<div><span class="k">last </span>${u.load_pct}%</div>` : ""}
+    ${u.charge_pct != null ? `<div><span class="k">lading </span>${u.charge_pct}%</div>` : ""}
+    ${runtime != null ? `<div><span class="k">driftstid </span>${runtime}</div>` : ""}
+    ${u.low_battery ? '<div class="ups-bad">LAVT BATTERI</div>' : ""}`;
 }
 
 function renderWan() {
   const el = $("wan");
   const w = state.wan;
   if (!w || !w.monitored || !w.adapters || !w.adapters.length) {
-    el.innerHTML = '<span class="empty">No uplink data</span>';
+    el.innerHTML = '<span class="empty">Ingen data om internettlinjer</span>';
     return;
   }
   const rows = w.adapters.map((a) => {
     let cls, label;
-    if (a.active) { cls = "wan-active"; label = "in use"; }
-    else if (a.link) { cls = "wan-standby"; label = "standby"; }
-    else { cls = "wan-down"; label = "down"; }
+    if (a.active) { cls = "wan-active"; label = "i bruk"; }
+    else if (a.link) { cls = "wan-standby"; label = "reserve"; }
+    else { cls = "wan-down"; label = "nede"; }
     const meta = [a.ip, a.metric != null ? `m${a.metric}` : null].filter(Boolean).join("  ·  ");
     return `<div class="wan-row">
       <span class="led"></span>
@@ -283,7 +286,7 @@ function renderWan() {
   }).join("");
   // No adapter active == the box currently has no internet at all.
   const none = w.adapters.every((a) => !a.active)
-    ? '<div class="ups-bad">No internet — all uplinks down</div>' : "";
+    ? '<div class="ups-bad">Ingen internett — alle linjer er nede</div>' : "";
   el.innerHTML = rows + none;
 }
 
@@ -291,24 +294,24 @@ function renderBalance() {
   const el = $("balance");
   const b = state.balance;
   if (!b || b.credit == null) {
-    el.innerHTML = '<span class="empty">Not checked</span>';
+    el.innerHTML = '<span class="empty">Ikke sjekket</span>';
     return;
   }
   const cls = b.low ? "ups-bad" : "";
   el.innerHTML = `
-    <div><span class="k">credit </span><span class="${cls}">${b.credit.toFixed(2)}</span></div>
-    ${b.low ? '<div class="ups-bad">LOW — top up SMS credits</div>' : ""}
-    ${b.last_checked ? `<div><span class="k">checked </span>${new Date(b.last_checked).toLocaleTimeString()}</div>` : ""}`;
+    <div><span class="k">saldo </span><span class="${cls}">${b.credit.toFixed(2)}</span></div>
+    ${b.low ? '<div class="ups-bad">LAV — fyll på SMS-kreditt</div>' : ""}
+    ${b.last_checked ? `<div><span class="k">sjekket </span>${new Date(b.last_checked).toLocaleTimeString("no-NO")}</div>` : ""}`;
 }
 
 // ---- Watchdog heartbeat (polled separately; not part of the WS snapshot) ----
 function renderWatchdog(s) {
   const el = $("watchdog");
   const pill = $("hbState");
-  if (!s) { el.innerHTML = '<span class="empty">No data</span>'; return; }
+  if (!s) { el.innerHTML = '<span class="empty">Ingen data</span>'; return; }
   if (!s.enabled) {
-    pill.dataset.state = "warn"; pill.textContent = "off";
-    el.innerHTML = '<span class="empty">Disabled (FW_HEARTBEAT_ENABLED=false)</span>';
+    pill.dataset.state = "warn"; pill.textContent = "av";
+    el.innerHTML = '<span class="empty">Slått av (FW_HEARTBEAT_ENABLED=false)</span>';
     return;
   }
   // Healthy = a successful beat within ~1.5x the interval and last code 200.
@@ -316,19 +319,19 @@ function renderWatchdog(s) {
     (Date.now() - new Date(s.last_success_at).getTime()) <= s.interval * 1500;
   const healthy = !!okRecent && s.last_status_code === 200;
   pill.dataset.state = healthy ? "up" : "down";
-  pill.textContent = healthy ? "ok" : "stale";
+  pill.textContent = healthy ? "ok" : "utdatert";
 
   const codeLine = s.last_status_code != null
     ? `${s.last_status_code}${s.last_response ? ` "${trunc(s.last_response, 24)}"` : ""}`
     : (s.last_error ? trunc(s.last_error, 36) : "—");
   const next = s.seconds_to_next_beat;
-  const atTitle = s.last_success_at ? new Date(s.last_success_at).toLocaleString() : "never succeeded";
+  const atTitle = s.last_success_at ? new Date(s.last_success_at).toLocaleString("no-NO") : "aldri lyktes";
   el.innerHTML = `
-    <div title="${esc(atTitle)}"><span class="k">last beat </span><span class="${healthy ? "" : "ups-bad"}">${esc(timeAgo(s.last_success_at))}</span>${s.last_success_at ? ` (${esc(new Date(s.last_success_at).toLocaleTimeString())})` : ""}</div>
-    <div><span class="k">response </span><span class="${s.last_status_code === 200 ? "" : "ups-bad"}">${esc(codeLine)}</span></div>
-    <div><span class="k">target </span>${esc(s.url)}</div>
-    <div><span class="k">interval </span>${esc(s.interval)}s${next != null ? `  ·  next in ${esc(next)}s` : ""}</div>
-    ${s.consecutive_failures ? `<div class="ups-bad">${esc(s.consecutive_failures)} consecutive failure(s)</div>` : ""}`;
+    <div title="${esc(atTitle)}"><span class="k">siste slag </span><span class="${healthy ? "" : "ups-bad"}">${esc(timeAgo(s.last_success_at))}</span>${s.last_success_at ? ` (${esc(new Date(s.last_success_at).toLocaleTimeString("no-NO"))})` : ""}</div>
+    <div><span class="k">svar </span><span class="${s.last_status_code === 200 ? "" : "ups-bad"}">${esc(codeLine)}</span></div>
+    <div><span class="k">mål </span>${esc(s.url)}</div>
+    <div><span class="k">intervall </span>${esc(s.interval)} s${next != null ? `  ·  neste om ${esc(next)} s` : ""}</div>
+    ${s.consecutive_failures ? `<div class="ups-bad">${esc(s.consecutive_failures)} feil på rad</div>` : ""}`;
 }
 
 async function loadWatchdog() {
@@ -352,7 +355,7 @@ function renderCountdown() {
       const ms = new Date(state.sirens_until).getTime() - Date.now();
       if (ms <= 0) { render(); return; }  // timer ran out: drop the SIRENS banner
       const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
-      el.textContent = `sirens auto-stop in ${m}m ${String(s).padStart(2, "0")}s`;
+      el.textContent = `brannsirenene stopper om ${m}m ${String(s).padStart(2, "0")}s`;
     };
     tick();
     countdownTimer = setInterval(tick, 1000);
@@ -362,9 +365,9 @@ function renderCountdown() {
   el.hidden = false;
   const tick = () => {
     const ms = new Date(state.event_until).getTime() - Date.now();
-    if (ms <= 0) { el.textContent = "reverting…"; return; }
+    if (ms <= 0) { el.textContent = "går tilbake til normal…"; return; }
     const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
-    el.textContent = `auto-revert in ${m}m ${String(s).padStart(2, "0")}s`;
+    el.textContent = `tilbake til normal om ${m}m ${String(s).padStart(2, "0")}s`;
   };
   tick();
   countdownTimer = setInterval(tick, 1000);
@@ -385,7 +388,7 @@ async function loadAudit() {
 
 function auditRow(r) {
   const cls = r.severity === "critical" ? "a-crit" : r.severity === "warning" ? "a-warn" : "";
-  const t = new Date(r.ts).toLocaleTimeString();
+  const t = new Date(r.ts).toLocaleTimeString("no-NO");
   const text = summarize(r);
   return `<li><span class="a-ts">${t}</span><span class="${cls}">${esc(text)}</span></li>`;
 }
@@ -393,14 +396,17 @@ function auditRow(r) {
 function summarize(r) {
   const d = r.detail || {};
   switch (r.kind) {
-    case "alarm": return `ALARM ${d.detector}${d.event_mode ? " (event: no interconnect)" : d.silenced ? " (silenced)" : ""}`;
-    case "alarm_replay": return `stale alarm ignored: ${d.detector} (last report ${new Date(d.last_seen).toLocaleString()})`;
-    case "mode_change": return `mode ${d.from} → ${d.to}`;
+    case "alarm": return `BRANN ${d.detector}${d.event_mode ? " (eventmodus: sirenelink avslått)" : d.silenced ? " (dempet)" : ""}`;
+    case "alarm_replay": return `gammel alarm ignorert: ${d.detector} (siste melding ${new Date(d.last_seen).toLocaleString("no-NO")})`;
+    case "mode_change": return `modus ${MODE_LABELS[d.from] || d.from} → ${MODE_LABELS[d.to] || d.to}`;
     case "sms": return `SMS ${d.policy}: ${trunc(d.text)}`;
-    case "dlr": return `DLR ${d.message_id}: ${d.status}`;
-    case "sms_unrouted": return `NOT SENT (no ${d.category} receivers): ${trunc(d.text)}`;
-    case "escalation": return `ESCALATED to ${(d.recipients || []).join(", ")}`;
-    case "fault": return `fault: ${trunc(JSON.stringify(d))}`;
+    case "dlr": return `Leveringskvittering ${d.message_id}: ${d.status}`;
+    case "sms_unrouted": return `IKKE SENDT (ingen mottakere for ${d.category}): ${trunc(d.text)}`;
+    case "escalation": return `ESKALERT til ${(d.recipients || []).join(", ")}`;
+    case "siren_interconnect": return `brannsirener startet (utløst av ${d.origin})`;
+    case "siren_silence": return "brannsirener dempet";
+    case "siren_test": return `sirenetest ${d.action === "on" ? "PÅ" : "AV"} (${d.sirens ?? "?"} sirener)`;
+    case "fault": return `feil: ${trunc(JSON.stringify(d))}`;
     default: return `${r.kind}: ${trunc(JSON.stringify(d))}`;
   }
 }
@@ -433,7 +439,7 @@ $("endBtn").addEventListener("click", async () => {
 });
 
 async function silenceSirens() {
-  if (!confirm("Silence all sirens now? Only do this once the venue is confirmed clear.")) return;
+  if (!confirm("Demp alle brannsirener nå? Gjør dette bare når lokalet er bekreftet trygt.")) return;
   await fetch("/api/siren/silence", { method: "POST" });
 }
 $("silenceBtn").addEventListener("click", silenceSirens);
@@ -452,7 +458,7 @@ document.querySelectorAll(".seg-btn").forEach((b) =>
 $("hbTestBtn").addEventListener("click", async () => {
   const btn = $("hbTestBtn"), msg = $("hbMsg");
   btn.disabled = true;
-  msg.hidden = false; msg.className = "hb-msg"; msg.textContent = "Sending…";
+  msg.hidden = false; msg.className = "hb-msg"; msg.textContent = "Sender…";
   try {
     const r = await fetch("/api/watchdog/test", { method: "POST" });
     const s = await r.json();
@@ -460,10 +466,10 @@ $("hbTestBtn").addEventListener("click", async () => {
     msg.className = "hb-msg " + (ok ? "ok" : "err");
     msg.textContent = ok
       ? `OK — 200 "${trunc(s.last_response, 24)}"`
-      : `Failed — ${s.last_status_code != null ? s.last_status_code + " " : ""}${trunc(s.last_error || s.last_response || "no response", 48)}`;
+      : `Feilet — ${s.last_status_code != null ? s.last_status_code + " " : ""}${trunc(s.last_error || s.last_response || "ingen svar", 48)}`;
     renderWatchdog(s);
   } catch (e) {
-    msg.className = "hb-msg err"; msg.textContent = "Request failed: " + e;
+    msg.className = "hb-msg err"; msg.textContent = "Forespørselen feilet: " + e;
   } finally {
     btn.disabled = false;
   }
