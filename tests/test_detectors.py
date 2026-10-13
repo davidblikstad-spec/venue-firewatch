@@ -150,13 +150,12 @@ def test_set_detectors_preserves_live_state(tmp_path):
 
 
 def _siren_machine(tmp_path, *, interconnect=True):
-    """A machine with two siren-capable detectors (one in a silenced zone) and
+    """A machine with two siren-capable detectors (in different zones) and
     a fake siren publisher that records every /set command."""
     settings = Settings(db_path=str(tmp_path / "t.db"))
     cfg = YamlConfig(
         siren_interconnect=interconnect,
         siren_max_duration_s=300,
-        silent_zones_in_event=["stage"],
         detectors=[
             Detector(friendly_name="smoke_foh", label="FoH", kind="smoke",
                      alarm_property="smoke", siren_property="alarm", zone="front_of_house"),
@@ -192,17 +191,29 @@ def test_interconnect_sounds_every_siren_capable_detector(tmp_path):
     asyncio.run(go())
 
 
-def test_interconnect_respects_event_silenced_zone(tmp_path):
+def test_event_mode_sends_sms_but_holds_interconnect(tmp_path):
+    # EVENT keeps the venue quiet: the SMS still goes out (we always want to
+    # know), but no remote sirens — only the tripped detector's own buzzer.
     machine, sent = _siren_machine(tmp_path)
+    texts: list[str] = []
+
+    async def fake_broadcast(msisdns, text, policy):
+        texts.append(text)
+        return {}
+
+    machine._notifier.broadcast = fake_broadcast
+    from app.config import Recipient
+    machine.set_recipients([Recipient(name="A", msisdn="4790000000")])
 
     async def go():
         from datetime import timedelta
         from app.models import now
         await machine._db.init()
         await machine.arm_event(now() + timedelta(hours=1), actor="test")  # -> EVENT
-        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
-        # The stage detector is in a silenced zone — it stays quiet venue-wide.
-        assert {n for n, _ in sent} == {"smoke_foh"}
+        await machine.on_detector_update("smoke_stage", {"smoke": True}, "smoke")
+        assert sent == []
+        assert len(texts) == 1 and "Stage" in texts[0]
+        assert machine._detectors["smoke_stage"].alarm is True
 
     asyncio.run(go())
 

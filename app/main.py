@@ -739,7 +739,7 @@ button{cursor:pointer;font-family:inherit}
 
 <div class="card">
 <h2>Monitored detectors</h2>
-<p class="hint">Each <code>friendly_name</code> must match Zigbee2MQTT exactly. <code>alarm_property</code> is the boolean field that goes true on detection (e.g. “smoke”, “heat”). EVENT mode silences only the zones you list as silent.</p>
+<p class="hint">Each <code>friendly_name</code> must match Zigbee2MQTT exactly. <code>alarm_property</code> is the boolean field that goes true on detection (e.g. “smoke”, “heat”). EVENT mode still sends every SMS but holds the venue-wide siren interconnect.</p>
 <table><thead><tr>
 <th>Label</th><th>Friendly name</th><th>Kind</th><th>Alarm prop</th><th title="Settable property that sounds this device's buzzer for interconnect (e.g. &quot;alarm&quot;). Leave blank if it has no remote siren.">Siren prop</th><th>Zone</th><th title="Hours without a check-in before it is treated as a fault">Offline h</th><th></th>
 </tr></thead><tbody id="rows"></tbody></table>

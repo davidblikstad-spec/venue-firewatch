@@ -71,7 +71,7 @@ function render() {
     const where = f.zone ? `${f.label} — ${f.zone} zone` : f.label;
     $("bannerLine").textContent = fires.length > 1 ? `${where} (+${fires.length - 1} more)` : where;
   } else if (state.mode === "event") {
-    $("bannerLine").textContent = "Alerts silenced for haze zones — fire watch is the detection";
+    $("bannerLine").textContent = "SMS alerts on — venue-wide sirens off; only the tripped detector sounds";
   } else {
     $("bannerLine").textContent = "Detection live — alerts will be sent";
   }
@@ -368,7 +368,7 @@ function auditRow(r) {
 function summarize(r) {
   const d = r.detail || {};
   switch (r.kind) {
-    case "alarm": return `ALARM ${d.detector}${d.silenced ? " (silenced)" : ""}`;
+    case "alarm": return `ALARM ${d.detector}${d.event_mode ? " (event: no interconnect)" : d.silenced ? " (silenced)" : ""}`;
     case "alarm_replay": return `stale alarm ignored: ${d.detector} (last report ${new Date(d.last_seen).toLocaleString()})`;
     case "mode_change": return `mode ${d.from} → ${d.to}`;
     case "sms": return `SMS ${d.policy}: ${trunc(d.text)}`;

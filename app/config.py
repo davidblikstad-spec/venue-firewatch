@@ -149,9 +149,8 @@ class YamlConfig(BaseModel):
     venue_name: str = ""
     recipients: list[Recipient] = Field(default_factory=list)
     detectors: list[Detector] = Field(default_factory=list)
-    # Zones that EVENT mode silences. Detectors in other zones still alert.
-    silent_zones_in_event: list[str] = Field(default_factory=lambda: ["stage"])
-    # When true, a real (non-silenced) alarm sounds every siren-capable detector.
+    # When true, an alarm in NORMAL mode sounds every siren-capable detector.
+    # EVENT mode never sounds the interconnect (SMS is still sent).
     siren_interconnect: bool = False
     # Seconds each remote siren self-stops after — the safety backstop so a
     # dropped broker or missed clear can't latch the buzzers on forever.

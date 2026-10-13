@@ -37,12 +37,12 @@ Zigbee mesh.
 
 ## Features
 
-- **NORMAL / EVENT state machine.** EVENT silences alerts for configured haze
-  zones and is logged + shown with a countdown. It **always auto-reverts** —
-  there is no open-ended silent toggle, and a hard ceiling (`FW_EVENT_MAX_HOURS`)
-  caps the silent window regardless of what end time is chosen.
-- **Carve-outs never silenced:** UPS/power events and detector offline/fault,
-  even during EVENT.
+- **NORMAL / EVENT state machine.** EVENT keeps the venue quiet: every SMS is
+  still sent, but a detector trip does not sound the siren interconnect — only
+  the detector that sensed smoke sounds its own buzzer, and staff investigate on
+  the SMS. EVENT is logged + shown with a countdown and **always auto-reverts** —
+  there is no open-ended toggle, and a hard ceiling (`FW_EVENT_MAX_HOURS`)
+  caps the window regardless of what end time is chosen.
 - **SMS routing, operator-selectable:** *GatewayAPI → modem* failover (default),
   or *both at once*. GatewayAPI is primary; the TRM240 sends native cellular SMS
   as the fallback that works even with no internet.
@@ -127,7 +127,7 @@ and stored in the database — you no longer have to hand-edit `config.yaml`:
 - **Migration:** on first boot the detectors in `config.yaml` are seeded into the
   store; from then on the dashboard is authoritative.
 
-(`config.yaml` still holds SMS recipients and `silent_zones_in_event`.)
+(`config.yaml` still holds the seed SMS recipients.)
 
 ## License
 

@@ -13,7 +13,7 @@ def now() -> datetime:
 
 class Mode(str, Enum):
     NORMAL = "normal"   # detection -> SMS alert
-    EVENT = "event"     # silenced zones logged only; fire watch is the detection
+    EVENT = "event"     # detection -> SMS alert, but no siren interconnect
 
 
 class Severity(str, Enum):

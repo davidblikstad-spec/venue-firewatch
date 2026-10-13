@@ -1,8 +1,8 @@
 """Core state machine.
 
 Holds live detector/UPS state and the NORMAL/EVENT mode. Decides, when a
-detector trips, whether to raise an SMS alert or merely log it (EVENT mode,
-silenced zone). Owns the EVENT-mode auto-expiry — the single most important
+detector trips, the SMS alert and whether to sound the siren interconnect
+(not in EVENT mode). Owns the EVENT-mode auto-expiry — the single most important
 safety feature here: EVENT is never an open-ended toggle, it always has an
 end time and reverts to NORMAL on its own.
 """
@@ -457,31 +457,31 @@ class StateMachine:
         await self._publish()
 
     async def _handle_alarm(self, det: DetectorState) -> None:
-        silenced = (
-            self.mode is Mode.EVENT and det.zone in self._cfg.silent_zones_in_event
-        )
+        # The SMS always goes out — we always want to know a detector sensed
+        # smoke. EVENT mode only keeps the venue quiet: no interconnect, so the
+        # tripped detector's own buzzer is the only noise while staff investigate.
+        event = self.mode is Mode.EVENT
         await self._db.audit(
             "alarm",
-            {"detector": det.friendly_name, "zone": det.zone, "silenced": silenced, "temperature": det.temperature},
+            {"detector": det.friendly_name, "zone": det.zone, "event_mode": event, "temperature": det.temperature},
             severity=Severity.CRITICAL.value,
             actor="detector",
         )
-        if silenced:
-            log.warning("ALARM (silenced, EVENT mode): %s zone=%s", det.label, det.zone)
-            return
         await self._raise(
             Severity.CRITICAL,
             self._msg("alarm", label=det.label, kind=det.kind, zone=det.zone, temperature=det.temperature),
             actor="detector", category="fire",
         )
+        if event:
+            log.warning("ALARM during EVENT mode: %s — SMS sent, interconnect sirens held", det.label)
+            return
         await self._sound_interconnect(origin=det)
 
     async def _sound_interconnect(self, origin: DetectorState) -> None:
         """Sound every siren-capable detector when one trips (opt-in).
 
-        Honours the same EVENT-mode silencing as the SMS alert: detectors in a
-        silenced zone stay quiet even venue-wide. Each siren self-stops after
-        `siren_max_duration_s` so a dropped broker can't latch the buzzers on.
+        Never called in EVENT mode (see _handle_alarm). Each siren self-stops
+        after `siren_max_duration_s` so a dropped broker can't latch the buzzers on.
         """
         if not self._cfg.siren_interconnect or self._siren is None:
             return
@@ -489,8 +489,6 @@ class StateMachine:
         for d in self._cfg.detectors:
             if d.siren_property is None:
                 continue  # device exposes no settable siren
-            if self.mode is Mode.EVENT and d.zone in self._cfg.silent_zones_in_event:
-                continue
             payload = {d.siren_property: True, "max_duration": dur}
             if await self._siren(d.friendly_name, payload):
                 self._interconnect_active = True

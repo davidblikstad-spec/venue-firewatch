@@ -22,13 +22,9 @@ recipients:
     msisdn: "4777777777"
     priority: 1
 
-# Zones that EVENT (silent) mode silences. Detectors in any other zone keep
-# alerting even during an event.
-silent_zones_in_event:
-  - stage
-
-# Interconnect: when a detector trips (and is not silenced by EVENT mode),
-# sound every siren-capable detector — see `siren_property` per detector below.
+# Interconnect: when a detector trips in NORMAL mode, sound every
+# siren-capable detector — see `siren_property` per detector below. EVENT
+# mode still sends the SMS but skips this.
 # Each remote siren self-stops after siren_max_duration_s, so a dropped broker
 # or missed "all clear" can never latch the buzzers on indefinitely. The
 # dashboard has a "Silence all sirens" button to drop them early.
