@@ -27,6 +27,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -145,7 +146,8 @@ def ensure_cellular(iface: str) -> None:
 
     wdm = wdm_for(iface)
     status = sh("qmi-network", wdm, "status")
-    if "connected" not in status.lower():
+    # Match "Status: connected" exactly — "disconnected" contains "connected".
+    if not re.search(r"status:\s*connected\b", status, re.IGNORECASE):
         sh("qmi-network", wdm, "start", timeout=40)
 
     settings = sh("qmicli", "-d", wdm, "--device-open-proxy",
