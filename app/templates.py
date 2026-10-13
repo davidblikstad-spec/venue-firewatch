@@ -21,6 +21,11 @@ SMS_TEMPLATES: dict[str, dict] = {
         "placeholders": ["label", "kind", "zone", "temperature"],
         "default": "FIRE ALARM: {label} ({kind}) in {zone}. Temp {temperature}C. Investigate immediately.",
     },
+    "all_clear": {
+        "label": "All clear after a fire alarm",
+        "placeholders": ["label", "zone", "how", "duration"],
+        "default": "ALL CLEAR: the fire alarm from {label} in {zone} is over — {how}. Lasted {duration}.",
+    },
     "detector_offline": {
         "label": "Detector offline (no check-in)",
         "placeholders": ["label", "zone"],

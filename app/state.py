@@ -110,6 +110,10 @@ class StateMachine:
         self.sirens_until: datetime | None = None
         self.sirens_origin: str | None = None
         self._silence_task: asyncio.Task | None = None
+        # The fire alarm in progress, so an all-clear SMS can follow it to the
+        # same people: started, label, zone, alert_keys, msisdns, sirens, silenced.
+        self._fire_event: dict | None = None
+        self._all_clear_since: datetime | None = None  # when everything first read quiet
 
         self._detectors: dict[str, DetectorState] = {
             d.friendly_name: DetectorState(
@@ -263,6 +267,8 @@ class StateMachine:
         if self.mode is Mode.EVENT and self.event_until and self.event_until <= now():
             log.warning("EVENT mode auto-expired; reverting to NORMAL")
             await self.set_mode(Mode.NORMAL, actor="auto-expiry")
+
+        await self._maybe_all_clear()
 
         changed = False
         for det in self._detectors.values():
@@ -475,11 +481,19 @@ class StateMachine:
             severity=Severity.CRITICAL.value,
             actor="detector",
         )
-        await self._raise(
+        alert_key, msisdns = await self._raise(
             Severity.CRITICAL,
             self._msg("alarm", label=det.label, kind=det.kind, zone=det.zone, temperature=det.temperature),
             actor="detector", category="fire",
         )
+        if self._fire_event is None:
+            self._fire_event = {
+                "started": now(), "label": det.label, "zone": det.zone,
+                "alert_keys": set(), "msisdns": set(), "sirens": False, "silenced": False,
+            }
+        self._fire_event["alert_keys"].add(alert_key)
+        self._fire_event["msisdns"].update(msisdns)
+        self._all_clear_since = None
         if event:
             log.warning("ALARM during EVENT mode: %s — SMS sent, interconnect sirens held", det.label)
             return
@@ -504,6 +518,8 @@ class StateMachine:
         if self._interconnect_active:
             self.sirens_until = now() + timedelta(seconds=dur)
             self.sirens_origin = origin.label
+            if self._fire_event is not None:
+                self._fire_event["sirens"] = True
         await self._db.audit(
             "siren_interconnect", {"origin": origin.friendly_name}, actor="detector",
         )
@@ -529,6 +545,72 @@ class StateMachine:
         await self._db.audit("siren_silence", {}, actor=actor)
         await self._publish()
         self._silence_task = asyncio.create_task(self._silence_retries())
+        if self._fire_event is not None:
+            # Silence is the operator's "venue confirmed clear": no hold-off.
+            self._fire_event["silenced"] = True
+            await self._maybe_all_clear(confirmed=True)
+
+    # Quiet time (no detector in alarm, sirens stopped) before an unconfirmed
+    # all-clear goes out, so a detector flapping true/false doesn't trigger it.
+    ALL_CLEAR_HOLD_S = 60
+
+    async def _maybe_all_clear(self, confirmed: bool = False) -> None:
+        """Send the all-clear SMS once the fire event is over: no detector in
+        alarm and the interconnect sirens stopped (silenced or timed out)."""
+        ev = self._fire_event
+        if ev is None:
+            return
+        if any(d.alarm for d in self._detectors.values()) or (
+            self.sirens_until is not None and self.sirens_until > now()
+        ):
+            self._all_clear_since = None
+            return
+        if not confirmed:
+            if self._all_clear_since is None:
+                self._all_clear_since = now()
+                return
+            if (now() - self._all_clear_since).total_seconds() < self.ALL_CLEAR_HOLD_S:
+                return
+        self._fire_event = None
+        self._all_clear_since = None
+        # The fire is over: stop escalating it to further tiers.
+        for key in ev["alert_keys"]:
+            self._active_alerts.pop(key, None)
+
+        if ev["silenced"]:
+            how = "sirens silenced from the dashboard"
+        elif ev["sirens"]:
+            how = "sirens stopped on their own timer (nobody pressed Silence)"
+        else:
+            how = "detector back to normal"
+        secs = int((now() - ev["started"]).total_seconds())
+        duration = f"{secs // 60}m {secs % 60:02d}s"
+        text = self._msg("all_clear", label=ev["label"], zone=ev["zone"], how=how, duration=duration)
+        log.warning("fire event over (%s); sending all-clear", how)
+        await self._send_direct(sorted(ev["msisdns"]), text, Severity.INFO, actor="all_clear")
+
+    async def _send_direct(self, msisdns: list[str], text: str, severity: Severity, actor: str) -> None:
+        """SMS a fixed list of numbers (no category routing, no escalation)."""
+        if not msisdns:
+            await self._db.audit("sms_unrouted", {"text": text}, severity=severity.value, actor=actor)
+            return
+        alert_key = self._next_alert_key()
+        results = await self._notifier.broadcast(msisdns, text, self.sms_policy)
+        for msisdn, send_results in results.items():
+            for sr in send_results:
+                if sr.ok:
+                    await self._db.track_sms(sr.message_id, msisdn, text, sr.transport, alert_key)
+        await self._db.audit(
+            "sms",
+            {
+                "text": text,
+                "policy": self.sms_policy.value,
+                "alert_key": alert_key,
+                "results": {m: [r.__dict__ for r in rs] for m, rs in results.items()},
+            },
+            severity=severity.value,
+            actor=actor,
+        )
 
     async def _send_siren_off(self) -> None:
         for d in self._cfg.detectors:
@@ -774,7 +856,11 @@ class StateMachine:
             actor="notify",
         )
 
-    async def _raise(self, severity: Severity, text: str, actor: str, category: str) -> None:
+    async def _raise(
+        self, severity: Severity, text: str, actor: str, category: str,
+    ) -> tuple[str, list[str]]:
+        """Send an alert to the category's first priority tier (escalating later
+        if critical). Returns the alert key and the numbers it went to."""
         alert_key = self._next_alert_key()
         sorted_recips = sorted(
             (r for r in self._cfg.recipients if category in r.categories), key=lambda r: r.priority
@@ -785,7 +871,7 @@ class StateMachine:
                 "sms_unrouted", {"text": text, "category": category},
                 severity=severity.value, actor=actor,
             )
-            return
+            return alert_key, []
 
         first_priority = sorted_recips[0].priority
         initial_recips = [r for r in sorted_recips if r.priority == first_priority]
@@ -823,6 +909,7 @@ class StateMachine:
                 "sent_at": now(),
                 "escalation_round": 0,
             }
+        return alert_key, msisdns
 
     async def check_escalations(self) -> None:
         """Escalate unacknowledged alerts to the next priority tier."""
@@ -866,6 +953,8 @@ class StateMachine:
                 actor="escalation",
             )
             log.warning("escalated alert %s to %s", alert_key, msisdns)
+            if self._fire_event is not None and alert_key in self._fire_event["alert_keys"]:
+                self._fire_event["msisdns"].update(msisdns)  # they get the all-clear too
 
             if after:
                 info["remaining_recipients"] = after

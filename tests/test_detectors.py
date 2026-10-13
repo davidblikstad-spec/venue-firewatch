@@ -353,6 +353,100 @@ def test_new_trip_cancels_pending_silence_retries(tmp_path):
     asyncio.run(go())
 
 
+def _all_clear_machine(tmp_path):
+    """Siren machine with a fire recipient and a recorder for every SMS."""
+    from app.config import Recipient
+    machine, sent = _siren_machine(tmp_path)
+    texts: list[tuple[list[str], str]] = []
+
+    async def fake_broadcast(msisdns, text, policy):
+        texts.append((list(msisdns), text))
+        return {}
+
+    machine._notifier.broadcast = fake_broadcast
+    machine.set_recipients([Recipient(name="A", msisdn="4790000000")])
+    return machine, texts
+
+
+def test_all_clear_sent_when_silenced_after_fire(tmp_path):
+    machine, texts = _all_clear_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        await machine.on_detector_update("smoke_foh", {"smoke": False}, "smoke")
+        await machine.tick()
+        assert len(texts) == 1  # sirens still sounding: no all-clear yet
+        await machine.silence_interconnect(actor="dashboard")
+        assert len(texts) == 2
+        msisdns, text = texts[1]
+        assert msisdns == ["4790000000"]
+        assert "ALL CLEAR" in text and "FoH" in text and "silenced" in text
+        await machine.tick()
+        assert len(texts) == 2  # only once
+
+    asyncio.run(go())
+
+
+def test_all_clear_waits_while_detector_still_in_alarm(tmp_path):
+    machine, texts = _all_clear_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        await machine.silence_interconnect(actor="dashboard")
+        assert len(texts) == 1  # silenced, but still smoke: not clear
+        machine.ALL_CLEAR_HOLD_S = 0
+        await machine.on_detector_update("smoke_foh", {"smoke": False}, "smoke")
+        await machine.tick()  # starts the quiet hold
+        await machine.tick()
+        assert len(texts) == 2 and "ALL CLEAR" in texts[1][1]
+
+    asyncio.run(go())
+
+
+def test_all_clear_after_sirens_time_out(tmp_path):
+    from datetime import timedelta
+    from app.models import now
+    machine, texts = _all_clear_machine(tmp_path)
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        await machine.on_detector_update("smoke_foh", {"smoke": False}, "smoke")
+        machine.sirens_until = now() - timedelta(seconds=1)  # timer ran out
+        machine._all_clear_since = now() - timedelta(seconds=machine.ALL_CLEAR_HOLD_S + 1)
+        await machine.tick()
+        assert len(texts) == 2 and "own timer" in texts[1][1]
+
+    asyncio.run(go())
+
+
+def test_all_clear_reaches_escalated_recipients_and_stops_escalation(tmp_path):
+    from datetime import timedelta
+    from app.config import Recipient
+    machine, texts = _all_clear_machine(tmp_path)
+    machine.set_recipients([
+        Recipient(name="A", msisdn="4790000001", priority=1),
+        Recipient(name="B", msisdn="4790000002", priority=2),
+        Recipient(name="C", msisdn="4790000003", priority=3),
+    ])
+
+    async def go():
+        await machine._db.init()
+        await machine.on_detector_update("smoke_foh", {"smoke": True}, "smoke")
+        (key,) = machine._active_alerts
+        machine._db.unacked_alerts = lambda k: asyncio.sleep(0, result=["4790000001"])
+        machine._active_alerts[key]["sent_at"] -= timedelta(hours=1)
+        await machine.check_escalations()  # -> B
+        await machine.on_detector_update("smoke_foh", {"smoke": False}, "smoke")
+        await machine.silence_interconnect(actor="dashboard")
+        assert texts[-1][0] == ["4790000001", "4790000002"]  # not C: never alerted
+        assert machine._active_alerts == {}  # C will not be escalated to now
+
+    asyncio.run(go())
+
+
 def _iso(seconds_ago: float) -> str:
     from datetime import timedelta
     from app.models import now
